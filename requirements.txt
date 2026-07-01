@@ -1,0 +1,23 @@
+# =============================================================================
+# Review Agent – Python Dependencies
+# =============================================================================
+# Install with: pip install -r requirements.txt
+
+# File parsing
+python-pptx>=0.6.23         # PPTX text & notes extraction
+PyMuPDF>=1.24.0             # PDF text extraction
+
+# LLM abstraction – unified interface to 100+ model providers
+litellm>=1.40.0
+
+# Configuration
+python-dotenv>=1.0.0        # .env file loading
+
+# Web UI
+streamlit>=1.35.0           # Interactive web interface
+
+# =============================================================================
+# Optional / Development
+# =============================================================================
+# pytest>=8.0.0             # Testing framework
+# pytest-mock>=3.12.0       # Mocking support
