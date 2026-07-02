@@ -1,137 +1,195 @@
-# 📚 Review Agent / 复习助手
+# Review Agent
 
-AI-powered lecture note generator that transforms PPT/PDF course materials into
-structured, review-ready Markdown notes.
-
-AI 驱动的课程笔记生成器，将 PPT/PDF 课件材料转换为结构化的、可用于复习的 Markdown 笔记。
+AI 驱动的课程笔记生成器，将 PPT/PDF 课件材料转换为结构化的 Markdown 笔记和 PDF 文件。
 
 ---
 
-## What It Does / 功能介绍
+## 功能介绍
 
-1. **Drop** your lecture PPT/PDF files into `01_Input_PPTs/`
-2. **Run** the agent – it auto-classifies each file by course & week number
-3. **Read** beautifully structured Markdown notes in `02_Output_Notes/`
+1. 将课程 PPT/PDF 文件放入输入文件夹
+2. 运行 Agent，自动按课程和周次分类每个文件
+3. 获得结构化的 Markdown 笔记，并可导出为 PDF
 
----
-
-1. **放入** 课程 PPT/PDF 文件到 `01_Input_PPTs/` 文件夹
-2. **运行** Agent – 自动按课程和周次分类每个文件
-3. **阅读** `02_Output_Notes/` 中结构精美的 Markdown 笔记
-
-Each generated note includes / 每份生成的笔记包含：
-- 🗺 **核心知识大纲 / Core Knowledge Outline** – structured mental map of the lecture / 课程的结构化思维导图
-- 📖 **关键概念与术语表 / Key Concepts & Glossary** – terms with definitions and memory aids / 术语及其定义和记忆锚点
-- ⚡ **重点总结 / Critical Takeaways** – exam-relevant highlights / 考试相关重点
-- 📝 **详细笔记（AI 扩展）/ Detailed Notes (AI-Expanded)** – concepts explained in plain language / 用通俗语言解释的概念
-- 🧪 **实验解答 / Lab Solutions** *(if applicable / 如适用)* – answers, explanations, pitfalls, and environment checklist / 答案、解释、避坑指南和环境清单
+每份生成的笔记包含：
+- 核心知识大纲 -- 课程的结构化思维导图
+- 关键概念与术语表 -- 术语及其定义和记忆锚点
+- 重点总结 -- 考试相关重点
+- 详细笔记 (AI 扩展) -- 用通俗语言解释的概念
+- 实验解答 (如适用) -- 答案、解释、避坑指南和环境清单
 
 ---
 
-## Quick Start / 快速开始
+## 快速开始
 
-### 1. Setup / 环境配置
+### 1. 克隆项目
 
 ```bash
-# Clone and enter the project / 克隆并进入项目
+git clone <your-repo-url> reviewSystem
 cd reviewSystem
+```
 
-# Create virtual environment / 创建虚拟环境
+### 2. 环境配置
+
+```bash
+# 创建虚拟环境
 python -m venv venv
-source venv/bin/activate      # macOS / Linux
-venv\Scripts\activate         # Windows
 
-# Install dependencies / 安装依赖
+# 激活虚拟环境
+# Windows:
+venv\Scripts\activate
+# macOS / Linux:
+source venv/bin/activate
+
+# 安装依赖
 pip install -r requirements.txt
 ```
 
-### 2. Configure API Keys / 配置 API 密钥
+### 3. 配置 API 密钥
 
 ```bash
+# 从模板创建 .env 文件
 cp .env.example .env
 ```
 
-Edit `.env` and set at minimum / 编辑 `.env`，至少设置：
+编辑 `.env` 文件，至少设置 API 密钥：
+
 ```bash
 API_KEY=sk-your-api-key-here
 ```
 
-### 3. Add Your Course Files / 添加课程文件
+也可以进入程序后在 [4] Settings 菜单中配置。
 
-Drop your PPT/PDF files into the `01_Input_PPTs/` folder / 将 PPT/PDF 文件放入 `01_Input_PPTs/` 文件夹：
+### 4. 添加课程文件
+
+将 PPT/PDF 文件放入 `01_Input_PPTs/` 文件夹。支持按子文件夹组织（例如按课程名称）：
+
 ```
 01_Input_PPTs/
-├── CS101_Week1_Intro.pptx
-├── 操作系统_第3周_进程管理.pdf
-└── ML_week5_neural_nets.pptx
+├── CS101/
+│   ├── Week1_Intro.pptx
+│   └── Week2_Variables.pdf
+└── MATH201/
+    ├── Chapter1_Limits.pptx
+    └── Chapter2_Derivatives.pdf
 ```
 
-### 4. Run / 运行
+### 5. 运行
 
-**命令行 / Command-line：**
 ```bash
 python main.py
 ```
 
-**网页界面 / Web interface：**
+---
+
+## CLI 菜单说明
+
+运行 `python main.py` 后进入交互式菜单：
+
+```
+============================================================
+         Review Agent v1.0
+    AI-Powered Lecture Note Generator
+============================================================
+
+  [1] Upload & Process Files
+  [2] View Exported PDFs / Output
+  [3] Processing History
+  [4] Settings
+  [5] Exit
+```
+
+### [1] Upload & Process Files -- 上传并处理文件
+
+- 程序会扫描输入文件夹，列出发现的 PPT/PDF 文件
+- 自动检测新增或修改的文件（通过 MD5 哈希比对）
+- 显示哪些文件需要处理，确认后开始
+- 实时显示处理进度条
+- 处理完成后可选择是否导出 PDF
+
+### [2] View Exported PDFs / Output -- 查看导出文件
+
+- 显示输出目录的完整结构
+- 列出所有已生成的 PDF 和 Markdown 文件
+- 显示每个文件的大小和路径
+
+### [3] Processing History -- 处理历史
+
+- 显示所有已处理文件的记录（来源：`.sync_state.json`）
+- 包含文件名、处理状态、处理时间、输出路径
+- 支持查看原始 JSON 数据
+- 支持清除/重置处理历史
+
+### [4] Settings -- 设置
+
+可以在菜单中修改以下配置（修改后自动写入 `.env` 文件）：
+
+| 设置项 | 说明 |
+|--------|------|
+| API Key | LLM API 密钥 |
+| Model Preset | 模型预设 (budget / balanced / maximum) |
+| Classifier Model | 分类模型 (默认 gemini flash) |
+| Summarizer Model | 总结模型 (默认 claude sonnet) |
+| Lab Solver Model | 实验解答模型 |
+| Input Directory | 输入文件夹路径 |
+| Output Directory | 输出文件夹路径 |
+| Log Level | 日志级别 (DEBUG / INFO / WARNING / ERROR) |
+| View/Edit .env | 直接查看和编辑 .env 文件 |
+
+### [5] Exit -- 退出
+
+退出程序。
+
+---
+
+## 批量模式
+
+除了交互式菜单，也支持命令行参数进行批量处理：
+
 ```bash
-streamlit run app.py
+python main.py --preset budget              # 使用经济型模型
+python main.py --dry-run                    # 仅预览分类，不消耗 token
+python main.py --force file1.pptx           # 强制重新处理指定文件
+python main.py --input ./my_ppts            # 自定义输入目录
+python main.py --output ./my_notes          # 自定义输出目录
+python main.py --pdf                        # 处理完成自动导出 PDF
+python main.py --log-level DEBUG            # 详细日志
 ```
 
 ---
 
-### CLI Options / 命令行选项
-
-| Flag / 选项 | Description / 描述 |
-|------|-------------|
-| `--dry-run` | Scan & classify only – no token spending / 仅扫描和分类，不消耗 token |
-| `--force file1.pptx file2.pdf` | Force reprocess specific files / 强制重新处理指定文件 |
-| `--preset budget` | Use budget-friendly models / 使用经济型模型 |
-| `--preset maximum` | Use most powerful models / 使用最强模型 |
-| `--input ./my_ppts` | Custom input directory / 自定义输入目录 |
-| `--output ./my_notes` | Custom output directory / 自定义输出目录 |
-| `--log-level DEBUG` | Verbose logging / 详细日志 |
-
----
-
-## Output Structure / 输出结构
+## 输出结构
 
 ```
 02_Output_Notes/
-└── CS101_计算机科学导论/
-    └── Week_01_Introduction/
-        ├── summary.md           # 课程复习笔记 / Lecture review notes
-        └── lab_solution.md      # 实验解答 (仅当检测到实验时) / (only if lab detected)
+└── {Course_Name}/                    # 课程文件夹
+    ├── md/                           # 所有课程的 Markdown 笔记 (课程级别)
+    │   ├── Week_01_Topic_summary.md
+    │   ├── Week_01_Topic_lab_solution.md
+    │   ├── Week_02_Topic_summary.md
+    │   └── ...
+    ├── Week_01_Topic/                # 单周文件夹
+    │   ├── summary.pdf               # 生成的 PDF
+    │   ├── lab_solution.pdf          # 实验解答 PDF
+    │   └── original_file.ppt         # 原始文件副本
+    └── Week_02_Topic/
+        └── ...
 ```
+
+Markdown 文件统一放在课程级别的 `md/` 子文件夹中，而不是分散在每周的子文件夹里。
 
 ---
 
-## How It Works / 工作原理
+## 模型预设
 
-```
-PPT/PDF → 提取文本 Extract text → AI 分类 AI Classification → AI 总结 AI Summarization
-                                                              ↘ (如有实验 if lab) AI 实验解答 AI Lab Solver
-                                                              → Markdown 写入 Markdown Writer → 输出 Output
-```
-
-- **增量同步 / Incremental**：使用 MD5 哈希通过 `.sync_state.json` 追踪状态 – 仅处理新增或修改的文件
-- **多模型 / Multi-model**：LiteLLM 支持一行切换模型（Gemini、Claude、DeepSeek、Ollama 等）
-- **两步 AI / Two-step AI**：廉价模型用于分类，强大模型用于内容生成
-- **容错性 / Resilient**：单文件隔离 – 一个文件出错不会中断整批处理；自动状态备份
-
----
-
-## Model Presets / 模型预设
-
-| Preset | Classifier / 分类器 | Summarizer / 总结器 | Lab Solver / 实验解答 |
+| Preset | Classifier | Summarizer | Lab Solver |
 |--------|-----------|------------|------------|
-| `budget` / 经济型 | Gemini Flash | DeepSeek Chat | DeepSeek Chat |
-| `balanced` / 均衡型 | Gemini Flash | Claude Sonnet | Claude Sonnet |
-| `maximum` / 最强型 | Claude Sonnet | Claude Opus | Claude Opus |
+| budget | Gemini Flash | DeepSeek Chat | DeepSeek Chat |
+| balanced | Gemini Flash | Claude Sonnet | Claude Sonnet |
+| maximum | Claude Sonnet | Claude Opus | Claude Opus |
 
-Set via `.env` (`PRESET=balanced`) or CLI (`--preset balanced`). / 通过 `.env` (`PRESET=balanced`) 或 CLI (`--preset balanced`) 设置。
+通过 `.env` 文件 (`PRESET=balanced`) 或 CLI 菜单 [4] Settings 设置。
 
-You can override individual models in `.env` / 可在 `.env` 中单独覆盖模型：
+也可以单独覆盖模型：
 ```bash
 CLASSIFIER_MODEL=gemini/gemini-2.0-flash
 SUMMARIZER_MODEL=claude-sonnet-4-20250514
@@ -140,41 +198,54 @@ LAB_SOLVER_MODEL=deepseek/deepseek-chat
 
 ---
 
-## Supported File Formats / 支持的文件格式
+## 工作原理
 
-- `.pptx` – PowerPoint presentations / PowerPoint 演示文稿（文本 + 演讲者备注）
-- `.ppt` – Legacy PowerPoint / 旧版 PowerPoint（支持有限）
-- `.pdf` – PDF documents / PDF 文档
+```
+PPT/PDF -> 提取文本 -> AI 分类 -> AI 总结
+                                  -> (如有实验) AI 实验解答
+                                  -> Markdown 写入 -> 输出
+```
 
-> ⚠ **图片较多的幻灯片 / Image-heavy slides**：当前版本仅提取文本。对于图表较多的课程，请使用支持 Vision 的 LLM 模型，或先将幻灯片转换为富文本格式。
+- **增量同步**: 使用 MD5 哈希追踪处理状态，仅处理新增或修改的文件
+- **多模型**: LiteLLM 支持一行切换模型 (Gemini、Claude、DeepSeek、Ollama 等)
+- **两步 AI**: 廉价模型用于分类，强大模型用于内容生成
+- **容错性**: 单文件隔离，一个文件出错不会中断整批处理
 
 ---
 
-## Project Structure / 项目结构
+## 支持的文件格式
+
+- `.pptx` -- PowerPoint 演示文稿 (文本 + 演讲者备注)
+- `.ppt` -- 旧版 PowerPoint (支持有限)
+- `.pdf` -- PDF 文档
+
+> 注意: 当前版本仅提取文本。对于图片较多的幻灯片，请使用支持 Vision 的 LLM 模型。
+
+---
+
+## 项目结构
 
 ```
 reviewSystem/
-├── main.py                  # CLI 入口 / CLI entry point
-├── app.py                   # Streamlit 入口 / Streamlit entry point
-├── convert_to_pdf.py        # PDF 导出工具 / PDF export tool
-├── requirements.txt         # Python 依赖 / Python dependencies
-├── .env.example             # 环境变量模板 / Environment template
-├── 01_Input_PPTs/           # ← 在此放入文件 / Drop your files here
-├── 02_Output_Notes/         # ← 生成的笔记出现于此 / Generated notes appear here
-├── prompts/                 # LLM 提示词模板 / LLM prompt templates
+├── main.py                  # CLI 入口
+├── convert_md_to_pdf.py     # MD -> PDF 导出工具
+├── requirements.txt         # Python 依赖
+├── .env.example             # 环境变量模板
+├── 01_Input_PPTs/           # <-- 在此放入 PPT/PDF 文件
+├── 02_Output_Notes/         # <-- 生成的笔记和 PDF 出现于此
+├── prompts/                 # LLM 提示词模板
 └── src/
-    ├── config/              # 配置与环境变量管理 / Settings & env management
-    ├── scanner/             # 文件发现与状态追踪 / File discovery & state tracking
-    ├── parser/              # PPTX 与 PDF 文本提取 / PPTX & PDF text extraction
-    ├── llm/                 # LiteLLM 客户端封装 / LiteLLM client wrapper
-    ├── classifier/          # AI 课程/周次分类器 / AI course/week classifier
-    ├── generator/           # 总结器、实验解答器、Markdown 写入器 / Summarizer, Lab Solver, Markdown Writer
-    ├── pipeline.py          # 核心编排器 / Core orchestrator
-    └── ui/                  # Streamlit 网页界面 / Streamlit web interface
+    ├── config/              # 配置与环境变量管理
+    ├── scanner/             # 文件发现与状态追踪
+    ├── parser/              # PPTX 与 PDF 文本提取
+    ├── llm/                 # LiteLLM 客户端封装
+    ├── classifier/          # AI 课程/周次分类器
+    ├── generator/           # 总结器、实验解答器、Markdown 写入器
+    └── pipeline.py          # 核心编排器
 ```
 
 ---
 
-## License / 许可证
+## License
 
 MIT

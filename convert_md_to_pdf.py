@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """
-Convert all generated Markdown files to PDF and reorganize output.
+Convert all generated Markdown files to PDF.
 
-- Converts summary.md / lab_solution.md → PDF using markdown + Playwright (Chromium)
-- Moves .md files into a `md/` subfolder within each week's directory
-- Preserves original .ppt files in place
+Reads .md files from the course-level ``md/`` subfolder and writes
+PDF output into the corresponding week folder alongside the source PPT.
+
+Output structure:
+    02_Output_Notes/
+    └── {Course_Name}/
+        ├── md/                                    <-- source .md files (course level)
+        │   ├── Week_01_Topic_summary.md
+        │   └── Week_01_Topic_lab_solution.md
+        ├── Week_01_Topic/
+        │   ├── summary.pdf                         <-- generated PDF
+        │   ├── lab_solution.pdf                    <-- generated PDF
+        │   └── original_file.ppt
+        └── Week_02_Another_Topic/
+            └── ...
 """
 
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -177,24 +190,81 @@ def md_to_html(md_path: Path) -> str:
     return html
 
 
+def find_week_dir(course_dir: Path, week_name: str) -> Path:
+    """
+    Given a course directory and a week folder name (e.g. ``Week_01_Introduction``),
+    return the matching week directory.
+
+    Falls back to creating the directory if it does not exist.
+    """
+    week_dir = course_dir / week_name
+    week_dir.mkdir(parents=True, exist_ok=True)
+    return week_dir
+
+
+def parse_md_filename(md_filename: str) -> tuple[str | None, str | None]:
+    """
+    Parse an md filename like ``Week_01_Introduction_summary.md``
+    into ``(week_name, file_type)``.
+
+    Returns
+    -------
+    tuple[str | None, str | None]
+        (week_folder_name, file_type)  e.g. ("Week_01_Introduction", "summary")
+        or (None, None) if the filename does not match the pattern.
+    """
+    stem = Path(md_filename).stem  # e.g. "Week_01_Introduction_summary"
+
+    # Try to match: Week_NN_TopicName_type
+    pattern = r'^(Week_\d{2}_.+)_(summary|lab_solution)$'
+    match = re.match(pattern, stem)
+    if match:
+        return match.group(1), match.group(2)
+
+    return None, None
+
+
 def convert_all(output_dir: Path) -> None:
-    """Find all .md files and convert them to PDF, then move to md/ subfolder."""
-    md_files = list(output_dir.rglob("*.md"))
+    """
+    Find all .md files in course-level ``md/`` folders and convert them
+    to PDF in the corresponding week folder.
+    """
+    # Find md/ folders at the course level
+    md_dirs = list(output_dir.glob("*/md"))
+    if not md_dirs:
+        logger.warning(f"No course-level md/ folders found in {output_dir}")
+        return
+
+    md_files: list[tuple[Path, str, str]] = []  # (md_path, course_name, week_name, type)
+    for md_dir in md_dirs:
+        course_name = md_dir.parent.name
+        for f in sorted(md_dir.glob("*.md")):
+            week_name, file_type = parse_md_filename(f.name)
+            if week_name and file_type:
+                md_files.append((f, course_name, week_name, file_type))
+            else:
+                logger.warning(f"Cannot parse filename: {f.name}, skipping.")
+
     if not md_files:
-        logger.warning(f"No .md files found in {output_dir}")
+        logger.warning("No parseable .md files found.")
         return
 
     logger.info(f"Found {len(md_files)} Markdown file(s) to convert")
-    logger.info("Launching headless Chromium (one-time) …")
+    logger.info("Launching headless Chromium (one-time) ...")
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context()
 
-        for md_path in md_files:
-            pdf_path = md_path.with_suffix(".pdf")
+        for md_path, course_name, week_name, file_type in md_files:
+            # PDF goes into the week folder
+            week_dir = output_dir / course_name / week_name
+            week_dir.mkdir(parents=True, exist_ok=True)
+            pdf_path = week_dir / f"{file_type}.pdf"
 
-            logger.info(f"Converting: {md_path.relative_to(output_dir)}")
+            rel = md_path.relative_to(output_dir)
+            logger.info(f"Converting: {rel}")
+
             try:
                 html = md_to_html(md_path)
 
@@ -207,17 +277,13 @@ def convert_all(output_dir: Path) -> None:
                     print_background=True,
                 )
                 page.close()
-                logger.info(f"  → PDF: {pdf_path.relative_to(output_dir)}")
-            except Exception as exc:
-                logger.error(f"  ✗ Failed: {exc}")
-                continue
 
-            # Move .md into md/ subfolder
-            md_dir = md_path.parent / "md"
-            md_dir.mkdir(parents=True, exist_ok=True)
-            new_md_path = md_dir / md_path.name
-            md_path.rename(new_md_path)
-            logger.info(f"  → MD moved: {new_md_path.relative_to(output_dir)}")
+                pdf_rel = pdf_path.relative_to(output_dir)
+                pdf_size = pdf_path.stat().st_size / 1024
+                logger.info(f"  -> PDF: {pdf_rel} ({pdf_size:.0f} KB)")
+            except Exception as exc:
+                logger.error(f"  [FAIL] {rel}: {exc}")
+                continue
 
         browser.close()
 

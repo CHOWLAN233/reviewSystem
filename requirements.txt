@@ -14,9 +14,6 @@ litellm>=1.40.0
 # Configuration
 python-dotenv>=1.0.0        # .env file loading
 
-# Web UI
-streamlit>=1.35.0           # Interactive web interface
-
 # MD → PDF conversion
 markdown>=3.5               # Markdown to HTML
 playwright>=1.40.0          # Headless Chromium for HTML → PDF

@@ -378,11 +378,13 @@ class Pipeline:
         """Write a placeholder note when no text could be extracted."""
         content = (
             f"# {classification.course_name} Week {classification.week_number}: {classification.topic}\n\n"
-            f"> ⚠ Placeholder – no text could be extracted from `{filename}`.\n\n"
+            f"> Warning: Placeholder -- no text could be extracted from `{filename}`.\n\n"
             f"This file may be image-heavy or use an unsupported format. "
             f"Try converting it to a text-based format or use a Vision LLM for processing.\n"
         )
-        filepath = output_dir / "summary.md"
+        md_dir = self.writer.get_md_dir(classification)
+        week_name = self.writer.get_week_folder_name(classification, filename)
+        filepath = md_dir / f"{week_name}_summary.md"
         self.writer._atomic_write(filepath, content)
 
     @staticmethod

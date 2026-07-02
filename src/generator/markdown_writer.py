@@ -1,13 +1,19 @@
 """
-Markdown writer – renders structured content into .md files and
+Markdown writer -- renders structured content into .md files and
 organizes them in the output directory tree.
 
 Output layout:
     02_Output_Notes/
     └── {Course_Name}/
-        └── Week_{XX}_{Topic_Slug}/
-            ├── summary.md
-            └── lab_solution.md          (if has_lab)
+        ├── md/                                    <-- all .md files at course level
+        │   ├── Week_01_Topic_summary.md
+        │   └── Week_01_Topic_lab_solution.md      (if has_lab)
+        ├── Week_01_Topic/
+        │   ├── summary.pdf                         (after PDF conversion)
+        │   ├── lab_solution.pdf                    (after PDF conversion)
+        │   └── original_file.ppt                   (copy for reference)
+        └── Week_02_Another_Topic/
+            └── ...
 """
 
 from __future__ import annotations
@@ -55,7 +61,7 @@ class MarkdownWriter:
         Returns
         -------
         Path
-            The created (or existing) output directory.
+            The created (or existing) output directory for PDFs and source copies.
         """
         course = self._sanitize(classification.course_name)
 
@@ -63,7 +69,6 @@ class MarkdownWriter:
             topic_slug = self._sanitize(classification.topic)
             folder_name = f"Week_{classification.week_number:02d}_{topic_slug}"
         else:
-            # Fallback: use original filename (without extension) as folder name
             if source_filename:
                 stem = Path(source_filename).stem
                 folder_name = self._sanitize(stem)
@@ -76,6 +81,46 @@ class MarkdownWriter:
         logger.info(f"Output directory: {dir_path}")
         return dir_path
 
+    def get_md_dir(self, classification: ClassificationResult) -> Path:
+        """
+        Return the course-level ``md/`` directory where all .md files
+        for this course are stored.
+
+        Parameters
+        ----------
+        classification : ClassificationResult
+
+        Returns
+        -------
+        Path
+            e.g. ``02_Output_Notes/SOF_103/md/``
+        """
+        course = self._sanitize(classification.course_name)
+        md_dir = self.output_dir / course / "md"
+        md_dir.mkdir(parents=True, exist_ok=True)
+        return md_dir
+
+    def get_week_folder_name(self, classification: ClassificationResult, source_filename: str = "") -> str:
+        """
+        Return the week folder name (without course prefix) used for
+        naming md files and the week output directory.
+
+        Returns
+        -------
+        str
+            e.g. ``Week_01_Introduction``
+        """
+        if classification.week_number > 0:
+            topic_slug = self._sanitize(classification.topic)
+            return f"Week_{classification.week_number:02d}_{topic_slug}"
+        else:
+            if source_filename:
+                stem = Path(source_filename).stem
+                return self._sanitize(stem)
+            else:
+                topic_slug = self._sanitize(classification.topic)
+                return f"Unknown_{topic_slug}"
+
     def write_summary(
         self,
         output_dir: Path,
@@ -84,12 +129,16 @@ class MarkdownWriter:
         source_filename: str,
     ) -> Path:
         """
-        Render and write ``summary.md``.
+        Render and write ``summary.md`` into the course-level ``md/`` folder.
+
+        The file is named ``{week_folder_name}_summary.md``.
 
         Returns the path to the written file.
         """
         content = self._render_summary(classification, summary, source_filename)
-        filepath = output_dir / "summary.md"
+        md_dir = self.get_md_dir(classification)
+        week_name = self.get_week_folder_name(classification, source_filename)
+        filepath = md_dir / f"{week_name}_summary.md"
         self._atomic_write(filepath, content)
         logger.info(f"Wrote summary: {filepath}")
         return filepath
@@ -102,12 +151,16 @@ class MarkdownWriter:
         source_filename: str,
     ) -> Path:
         """
-        Render and write ``lab_solution.md``.
+        Render and write ``lab_solution.md`` into the course-level ``md/`` folder.
+
+        The file is named ``{week_folder_name}_lab_solution.md``.
 
         Returns the path to the written file.
         """
         content = self._render_lab(classification, solution, source_filename)
-        filepath = output_dir / "lab_solution.md"
+        md_dir = self.get_md_dir(classification)
+        week_name = self.get_week_folder_name(classification, source_filename)
+        filepath = md_dir / f"{week_name}_lab_solution.md"
         self._atomic_write(filepath, content)
         logger.info(f"Wrote lab solution: {filepath}")
         return filepath
@@ -193,7 +246,7 @@ class MarkdownWriter:
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         lines: list[str] = [
-            f"# {classification.course_name} Week {classification.week_number}: Lab Solution – {classification.topic}",
+            f"# {classification.course_name} Week {classification.week_number}: Lab Solution -- {classification.topic}",
             "",
             f"> Generated by Review Agent on {timestamp}  ",
             f"> Source: `{source_filename}`",
@@ -255,7 +308,7 @@ class MarkdownWriter:
         """
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
-        # Write to a temp file in the same directory (same filesystem → atomic rename)
+        # Write to a temp file in the same directory (same filesystem -> atomic rename)
         fd, tmp_path = tempfile.mkstemp(
             suffix=".md", prefix=".tmp_", dir=str(filepath.parent)
         )
