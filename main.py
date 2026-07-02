@@ -1441,8 +1441,8 @@ def interactive_main() -> None:
         print("  [2] View Exported PDFs / Output")
         print("  [3] Processing History")
         print("  [4] Settings")
-        print("  [5] Exit")
-        print("  [6] Regenerate Files")
+        print("  [5] Regenerate Files")
+        print("  [6] Exit")
         print()
 
         # Quick status line
@@ -1483,9 +1483,6 @@ def interactive_main() -> None:
             if settings is None:
                 settings = _settings_or_default()
         elif choice == "5":
-            print("\n  Goodbye!")
-            sys.exit(0)
-        elif choice == "6":
             if settings is None or not settings.classifier_api_key:
                 try:
                     settings = Settings.from_env()
@@ -1495,6 +1492,9 @@ def interactive_main() -> None:
                     press_enter()
                     continue
             menu_regenerate(settings)
+        elif choice == "6":
+            print("\n  Goodbye!")
+            sys.exit(0)
         else:
             print("\n  Invalid choice. Please enter a number from 1 to 6.")
             press_enter()
