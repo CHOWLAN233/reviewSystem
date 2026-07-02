@@ -98,6 +98,10 @@ Examples:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO)",
     )
+    parser.add_argument(
+        "--pdf", action="store_true",
+        help="Convert generated Markdown notes to PDF (requires playwright + chromium)",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -153,6 +157,20 @@ Examples:
         )
         print()  # newline after progress bar
         print_report(report)
+
+        # Optional: convert Markdown → PDF
+        if args.pdf:
+            logger.info("--pdf flag set, converting Markdown to PDF …")
+            try:
+                from convert_md_to_pdf import convert_all
+                convert_all(settings.output_dir)
+            except ImportError as exc:
+                logger.error(
+                    f"PDF conversion requires additional dependencies: {exc}\n"
+                    "Install with: pip install playwright && python -m playwright install chromium"
+                )
+            except Exception as exc:
+                logger.error(f"PDF conversion failed: {exc}")
     except KeyboardInterrupt:
         print("\n\n⚠ Interrupted by user.", file=sys.stderr)
         sys.exit(130)
