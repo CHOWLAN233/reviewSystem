@@ -1171,6 +1171,172 @@ def _first_time_setup() -> Settings | None:
         return None
 
 
+def menu_regenerate(settings: Settings) -> None:
+    """
+    Option 6: Regenerate files.
+
+    1. Confirmation prompt before proceeding.
+    2. Opens the input folder so user can verify the file is ready.
+    3. Lists all files currently in the input folder.
+    4. User selects which file(s) to regenerate by index.
+    5. Clears the state record for selected files (forces reprocessing).
+    6. Runs the pipeline. Results overwrite the existing output folder.
+    """
+    clear_screen()
+    print_header("Regenerate Files")
+
+    # Step 1: Confirmation
+    print()
+    print("  WARNING: This will reprocess selected files and OVERWRITE")
+    print("  their existing output in the output directory.")
+    print()
+    choice = input("  Are you sure you want to continue? (y/n): ").strip().lower()
+    if choice not in ("y", "yes"):
+        print("  Cancelled.")
+        press_enter()
+        return
+
+    # Step 2: Open input folder
+    input_dir = settings.input_dir
+    input_dir.mkdir(parents=True, exist_ok=True)
+    open_folder(input_dir.resolve())
+
+    print(f"\n  Input folder opened: {input_dir.resolve()}")
+    print("  Verify the file(s) you want to regenerate are in place,")
+    print("  then press Enter to continue.")
+    print()
+    input("  Press Enter to scan for files...")
+
+    # Step 3: Scan and list
+    scanner = FileScanner(input_dir, settings.supported_extensions)
+    files = scanner.scan()
+
+    if not files:
+        print("  [INFO] No supported files found in the input directory.")
+        press_enter()
+        return
+
+    # Load state to show status of each file
+    state_mgr = StateManager(settings.state_file)
+    state = state_mgr.load_state()
+
+    print(f"\n  Found {len(files)} file(s):")
+    for i, fp in enumerate(files, 1):
+        try:
+            rel = fp.relative_to(input_dir)
+        except ValueError:
+            rel = fp
+        record = state.get(fp.name)
+        if record:
+            tag = f" [last: {record.last_processed[:16]}, status: {record.status}]"
+        else:
+            tag = " [never processed]"
+        print(f"    [{i}] {rel}{tag}")
+    print()
+
+    # Step 4: Select files to regenerate
+    print("  Which file(s) do you want to regenerate?")
+    print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
+    print("    - Enter 'all' to regenerate everything")
+    print()
+    selection = input("  Your choice: ").strip().lower()
+
+    selected_files: list[Path] = []
+    if selection == "all":
+        selected_files = list(files)
+    else:
+        try:
+            indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
+            for idx in indices:
+                if 1 <= idx <= len(files):
+                    selected_files.append(files[idx - 1])
+                else:
+                    print(f"  [WARN] Invalid index {idx}, skipping.")
+        except ValueError:
+            print("  [ERROR] Invalid input.")
+            press_enter()
+            return
+
+    if not selected_files:
+        print("  [INFO] No files selected. Cancelled.")
+        press_enter()
+        return
+
+    print(f"\n  Will regenerate {len(selected_files)} file(s):")
+    for fp in selected_files:
+        try:
+            rel = fp.relative_to(input_dir)
+        except ValueError:
+            rel = fp
+        print(f"    - {rel}")
+    print()
+
+    # Step 5: Final confirmation before processing
+    choice = input("  Start regeneration? This will overwrite existing output. (y/n): ").strip().lower()
+    if choice not in ("y", "yes"):
+        print("  Cancelled.")
+        press_enter()
+        return
+
+    # Step 6: Clear state for selected files so they get reprocessed
+    for fp in selected_files:
+        if fp.name in state:
+            logger.info(f"Clearing state for: {fp.name}")
+            del state[fp.name]
+    state_mgr.save_state(state)
+
+    # Step 7: Run the pipeline (same as upload, but we already cleared state)
+    pipeline = Pipeline(settings)
+
+    def cli_progress(message: str, fraction: float) -> None:
+        pct = int(fraction * 100)
+        bar_len = 30
+        filled = int(bar_len * fraction)
+        bar = "#" * filled + "-" * (bar_len - filled)
+        print(f"\r  [{bar}] {pct:3d}%  {message}", end="", flush=True)
+
+    print()
+    try:
+        force_names = [fp.name for fp in selected_files]
+        report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
+        print()
+        print_report(report)
+
+        if report.processed > 0:
+            _warn_missing_cjk_fonts()
+            pdf_choice = input("\n  Convert regenerated notes to PDF? (y/n): ").strip().lower()
+            if pdf_choice in ("y", "yes"):
+                print_bar("PDF Conversion")
+                try:
+                    from convert_md_to_pdf import convert_all
+                    convert_all(settings.output_dir)
+                except ImportError as exc:
+                    print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
+                    print("  Install with: pip install playwright && python -m playwright install chromium")
+                except Exception as exc:
+                    print(f"  [ERROR] PDF conversion failed: {exc}")
+
+    except KeyboardInterrupt:
+        print("\n\n  [INFO] Interrupted by user. Partial results saved.")
+        try:
+            state = state_mgr.load_state()
+            state_mgr.save_state(state)
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.exception(f"Regeneration failed: {exc}")
+        print(f"\n  [ERROR] Regeneration failed: {exc}")
+
+    # Open output folder
+    output_dir = settings.output_dir
+    if output_dir.exists():
+        print()
+        print(f"  Opening output folder: {output_dir.resolve()}")
+        open_folder(output_dir.resolve())
+
+    press_enter()
+
+
 def _startup_check() -> Settings | None:
     """
     Run on every interactive launch: verify API key is configured and working.
@@ -1276,6 +1442,7 @@ def interactive_main() -> None:
         print("  [3] Processing History")
         print("  [4] Settings")
         print("  [5] Exit")
+        print("  [6] Regenerate Files")
         print()
 
         # Quick status line
@@ -1293,7 +1460,7 @@ def interactive_main() -> None:
             print(f"  Status: API key NOT configured. Go to [4] Settings to set up.")
 
         print()
-        choice = input("  Select an option [1-5]: ").strip()
+        choice = input("  Select an option [1-6]: ").strip()
 
         if choice == "1":
             if settings is None or not settings.classifier_api_key:
@@ -1318,8 +1485,18 @@ def interactive_main() -> None:
         elif choice == "5":
             print("\n  Goodbye!")
             sys.exit(0)
+        elif choice == "6":
+            if settings is None or not settings.classifier_api_key:
+                try:
+                    settings = Settings.from_env()
+                except ValueError as exc:
+                    print(f"\n  [ERROR] Configuration required: {exc}")
+                    print("  Go to [4] Settings to configure your API key first.")
+                    press_enter()
+                    continue
+            menu_regenerate(settings)
         else:
-            print("\n  Invalid choice. Please enter a number from 1 to 5.")
+            print("\n  Invalid choice. Please enter a number from 1 to 6.")
             press_enter()
 
 
