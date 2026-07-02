@@ -1345,18 +1345,18 @@ def menu_regenerate(settings: Settings) -> None:
     Option 5: Regenerate files.
 
     1. Confirmation prompt before proceeding.
-    2. Scans files recursively (only filename displayed, not full path).
-    3. User selects which file(s) to regenerate by index.
-    4. Clears state records for selected files (forces reprocessing).
-    5. Runs the pipeline. Results overwrite existing output folders.
+    2. Scans and groups files by parent folder.
+    3. User selects which folder(s) to regenerate.
+    4. Deletes old output folders, clears state records.
+    5. Runs the pipeline. Results overwrite existing output.
     """
     clear_screen()
     print_header("Regenerate Files")
 
     # Step 1: Confirmation
     print()
-    print("  WARNING: This will reprocess selected files and OVERWRITE")
-    print("  their existing output in the output directory.")
+    print("  WARNING: This will DELETE the existing output for selected")
+    print("  courses and reprocess them from scratch.")
     print()
     choice = input("  Are you sure you want to continue? (y/n): ").strip().lower()
     if choice not in ("y", "yes"):
@@ -1364,47 +1364,63 @@ def menu_regenerate(settings: Settings) -> None:
         press_enter()
         return
 
-    # Step 2: Scan files recursively (same as upload, but no folder popup)
+    # Step 2: Scan and group files by parent folder
     input_dir = settings.input_dir
     input_dir.mkdir(parents=True, exist_ok=True)
     scanner = FileScanner(input_dir, settings.supported_extensions)
     files = scanner.scan()
 
     if not files:
-        print(f"\n  [INFO] No supported files found in the root of input directory.")
-        print(f"  Directory: {input_dir.resolve()}")
+        print(f"\n  [INFO] No supported files found in the input directory.")
         press_enter()
         return
 
-    # Load state to show status of each file
+    # Group files by parent folder name
     state_mgr = StateManager(settings.state_file)
     state = state_mgr.load_state()
+    groups: dict[str, list[Path]] = {}
+    for fp in files:
+        try:
+            rel = fp.relative_to(input_dir)
+            folder = str(rel.parent) if str(rel.parent) != "." else "(root)"
+        except ValueError:
+            folder = "(root)"
+        groups.setdefault(folder, []).append(fp)
 
-    print(f"\n  Found {len(files)} file(s):")
-    for i, fp in enumerate(files, 1):
-        record = state.get(fp.name)
-        if record:
-            tag = f" [last: {record.last_processed[:16]}]"
-        else:
-            tag = " [new]"
-        print(f"    [{i}] {fp.name}{tag}")
+    # Sort groups by name
+    sorted_groups = sorted(groups.items(), key=lambda x: x[0].lower())
+
+    print(f"\n  Found {len(files)} file(s) in {len(sorted_groups)} folder(s):\n")
+    for i, (folder, folder_files) in enumerate(sorted_groups, 1):
+        # Find latest timestamp in this group
+        latest = ""
+        for fp in folder_files:
+            record = state.get(fp.name)
+            if record and record.last_processed > latest:
+                latest = record.last_processed
+        tag = f" [last: {latest[:16]}]" if latest else ""
+        print(f"    [{i}] {folder}  ({len(folder_files)} files{tag})")
     print()
 
-    # Step 3: Select files + confirm (loop on "no")
+    # Step 3: Select folders + confirm (loop on "no")
     looping = False
     while True:
         if looping:
             clear_screen()
             print_header("Regenerate Files")
-            print(f"\n  Found {len(files)} file(s):")
-            for i, fp in enumerate(files, 1):
-                record = state.get(fp.name)
-                tag = f" [last: {record.last_processed[:16]}]" if record else " [new]"
-                print(f"    [{i}] {fp.name}{tag}")
+            print(f"\n  {len(sorted_groups)} folder(s) available:\n")
+            for i, (folder, folder_files) in enumerate(sorted_groups, 1):
+                latest = ""
+                for fp in folder_files:
+                    record = state.get(fp.name)
+                    if record and record.last_processed > latest:
+                        latest = record.last_processed
+                tag = f" [last: {latest[:16]}]" if latest else ""
+                print(f"    [{i}] {folder}  ({len(folder_files)} files{tag})")
             print()
 
-        print("  Which file(s) do you want to regenerate?")
-        print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
+        print("  Which folder do you want to regenerate?")
+        print("    - Enter folder numbers separated by commas (e.g. 1,3)")
         print("    - Enter 'all' to regenerate everything")
         print("    - Type 'b' to go back to main menu")
         print()
@@ -1415,15 +1431,15 @@ def menu_regenerate(settings: Settings) -> None:
             press_enter()
             return
 
-        selected_files: list[Path] = []
+        selected_groups: list[tuple[str, list[Path]]] = []
         if selection == "all":
-            selected_files = list(files)
+            selected_groups = list(sorted_groups)
         else:
             try:
                 indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
                 for idx in indices:
-                    if 1 <= idx <= len(files):
-                        selected_files.append(files[idx - 1])
+                    if 1 <= idx <= len(sorted_groups):
+                        selected_groups.append(sorted_groups[idx - 1])
                     else:
                         print(f"  [WARN] Invalid index {idx}, skipping.")
             except ValueError:
@@ -1431,30 +1447,53 @@ def menu_regenerate(settings: Settings) -> None:
                 looping = True
                 continue
 
-        if not selected_files:
-            print("  [INFO] No files selected.")
+        if not selected_groups:
+            print("  [INFO] No folder selected.")
             looping = True
             continue
 
-        print(f"\n  Will regenerate {len(selected_files)} file(s):")
-        for fp in selected_files:
-            print(f"    - {fp.name}")
+        # Flatten selected groups to file list
+        selected_files: list[Path] = []
+        print(f"\n  Will regenerate {len(selected_groups)} folder(s):")
+        for folder, folder_files in selected_groups:
+            print(f"    - {folder} ({len(folder_files)} files)")
+            selected_files.extend(folder_files)
         print()
 
         # Confirmation
-        choice = input("  Start regeneration? This will overwrite existing output. (y/n): ").strip().lower()
+        choice = input("  Start regeneration? This will DELETE old output first. (y/n): ").strip().lower()
         if choice in ("y", "yes"):
-            break  # Exit loop, proceed to processing
-        looping = True  # Loop back to file selection
+            break
+        looping = True
 
-    # Step 4: Clear state for selected files so they get reprocessed
+    # Step 4: Delete old output folders and clear state
+    output_dir = settings.output_dir
+    deleted_count = 0
+    for folder, folder_files in selected_groups:
+        # Find the output course folder from state records
+        for fp in folder_files:
+            record = state.get(fp.name)
+            if record and record.output_path:
+                # output_path is like "SOF 103/Week_01_..." – get the course folder
+                course_folder = record.output_path.split("/")[0] if "/" in record.output_path else record.output_path
+                target = output_dir / course_folder
+                if target.exists():
+                    import shutil
+                    shutil.rmtree(target, ignore_errors=True)
+                    logger.info(f"Deleted old output: {target}")
+                    deleted_count += 1
+                break  # Only need to find it once per folder group
+
+    # Clear state for all selected files
     for fp in selected_files:
         if fp.name in state:
-            logger.info(f"Clearing state for: {fp.name}")
             del state[fp.name]
     state_mgr.save_state(state)
 
-    # Step 5: Run the pipeline (same as upload, but we already cleared state)
+    if deleted_count > 0:
+        print(f"  [INFO] Deleted {deleted_count} old output folder(s).")
+
+    # Step 5: Run the pipeline
     pipeline = Pipeline(settings)
 
     def cli_progress(message: str, fraction: float) -> None:
@@ -1499,8 +1538,6 @@ def menu_regenerate(settings: Settings) -> None:
             logger.exception(f"Regeneration failed: {exc}")
             print(f"\n  [ERROR] Regeneration failed: {exc}")
 
-    # Open output folder
-    output_dir = settings.output_dir
     if output_dir.exists():
         print()
         print(f"  Opening output folder: {output_dir.resolve()}")
