@@ -535,53 +535,70 @@ def menu_upload(settings: Settings) -> None:
             new_indices.append(i)
     print()
 
-    # File selection
-    print("  Select which files to process:")
-    print("    - Press Enter to process ALL new/modified files")
-    print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
-    print("    - Type 'all' to process everything including up-to-date files")
-    print()
-    selection = input("  Your choice: ").strip().lower()
+    # File selection loop (allows re-selection on "no")
+    while True:
+        # Clear previous selection display
+        if 'selected_files' in dir():
+            clear_screen()
+            print_header("Upload & Process Files")
+            print(f"\n  [INFO] Found {len(files)} supported file(s):")
+            for i, fp in enumerate(files, 1):
+                tag = " [NEW/MODIFIED]" if fp in new_set else " [up-to-date]"
+                try:
+                    rel = fp.relative_to(input_dir)
+                except ValueError:
+                    rel = fp
+                print(f"    [{i}] {rel}{tag}")
+            print()
 
-    selected_files: list[Path] = []
-    if selection == "":
-        # Default: all new/changed
-        selected_files = list(new_or_changed)
-    elif selection == "all":
-        selected_files = list(files)
-    else:
-        # Parse comma-separated indices
-        try:
-            indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
-            for idx in indices:
-                if 1 <= idx <= len(files):
-                    selected_files.append(files[idx - 1])
-                else:
-                    print(f"  [WARN] Invalid index {idx}, skipping.")
-        except ValueError:
-            print("  [ERROR] Invalid input. Processing all new/modified files instead.")
+        print("  Select which files to process:")
+        print("    - Press Enter to process ALL new/modified files")
+        print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
+        print("    - Type 'all' to process everything including up-to-date files")
+        print("    - Type 'b' to go back to main menu")
+        print()
+        selection = input("  Your choice: ").strip().lower()
+
+        if selection == "b":
+            print("  Cancelled.")
+            press_enter()
+            return
+
+        selected_files: list[Path] = []
+        if selection == "":
             selected_files = list(new_or_changed)
+        elif selection == "all":
+            selected_files = list(files)
+        else:
+            try:
+                indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
+                for idx in indices:
+                    if 1 <= idx <= len(files):
+                        selected_files.append(files[idx - 1])
+                    else:
+                        print(f"  [WARN] Invalid index {idx}, skipping.")
+            except ValueError:
+                print("  [ERROR] Invalid input. Please try again.")
+                continue
 
-    if not selected_files:
-        print("  [INFO] No files selected. Cancelled.")
-        press_enter()
-        return
+        if not selected_files:
+            print("  [INFO] No files selected.")
+            continue
 
-    print(f"\n  [INFO] Will process {len(selected_files)} file(s):")
-    for fp in selected_files:
-        try:
-            rel = fp.relative_to(input_dir)
-        except ValueError:
-            rel = fp
-        print(f"    - {rel}")
-    print()
+        print(f"\n  [INFO] Will process {len(selected_files)} file(s):")
+        for fp in selected_files:
+            try:
+                rel = fp.relative_to(input_dir)
+            except ValueError:
+                rel = fp
+            print(f"    - {rel}")
+        print()
 
-    # Confirm
-    choice = input("  Start processing? (y/n): ").strip().lower()
-    if choice not in ("y", "yes"):
-        print("  Cancelled.")
-        press_enter()
-        return
+        # Confirm
+        choice = input("  Start processing? (y/n): ").strip().lower()
+        if choice in ("y", "yes"):
+            break  # Exit loop, proceed to processing
+        # Otherwise loop back to file selection
 
     # Build pipeline and run
     pipeline = Pipeline(settings)
@@ -1384,49 +1401,68 @@ def menu_regenerate(settings: Settings) -> None:
         print(f"    [{i}] {rel}{tag}")
     print()
 
-    # Step 4: Select files to regenerate
-    print("  Which file(s) do you want to regenerate?")
-    print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
-    print("    - Enter 'all' to regenerate everything")
-    print()
-    selection = input("  Your choice: ").strip().lower()
+    # Steps 4-5: Select files + confirm (loop on "no")
+    while True:
+        # Re-display files on loop
+        if 'selected_files' in dir():
+            clear_screen()
+            print_header("Regenerate Files")
+            print(f"\n  Found {len(files)} file(s):")
+            for i, fp in enumerate(files, 1):
+                try:
+                    rel = fp.relative_to(input_dir)
+                except ValueError:
+                    rel = fp
+                record = state.get(fp.name)
+                tag = f" [last: {record.last_processed[:16]}, status: {record.status}]" if record else " [never processed]"
+                print(f"    [{i}] {rel}{tag}")
+            print()
 
-    selected_files: list[Path] = []
-    if selection == "all":
-        selected_files = list(files)
-    else:
-        try:
-            indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
-            for idx in indices:
-                if 1 <= idx <= len(files):
-                    selected_files.append(files[idx - 1])
-                else:
-                    print(f"  [WARN] Invalid index {idx}, skipping.")
-        except ValueError:
-            print("  [ERROR] Invalid input.")
+        print("  Which file(s) do you want to regenerate?")
+        print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
+        print("    - Enter 'all' to regenerate everything")
+        print("    - Type 'b' to go back to main menu")
+        print()
+        selection = input("  Your choice: ").strip().lower()
+
+        if selection == "b":
+            print("  Cancelled.")
             press_enter()
             return
 
-    if not selected_files:
-        print("  [INFO] No files selected. Cancelled.")
-        press_enter()
-        return
+        selected_files: list[Path] = []
+        if selection == "all":
+            selected_files = list(files)
+        else:
+            try:
+                indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
+                for idx in indices:
+                    if 1 <= idx <= len(files):
+                        selected_files.append(files[idx - 1])
+                    else:
+                        print(f"  [WARN] Invalid index {idx}, skipping.")
+            except ValueError:
+                print("  [ERROR] Invalid input. Please try again.")
+                continue
 
-    print(f"\n  Will regenerate {len(selected_files)} file(s):")
-    for fp in selected_files:
-        try:
-            rel = fp.relative_to(input_dir)
-        except ValueError:
-            rel = fp
-        print(f"    - {rel}")
-    print()
+        if not selected_files:
+            print("  [INFO] No files selected.")
+            continue
 
-    # Step 5: Final confirmation before processing
-    choice = input("  Start regeneration? This will overwrite existing output. (y/n): ").strip().lower()
-    if choice not in ("y", "yes"):
-        print("  Cancelled.")
-        press_enter()
-        return
+        print(f"\n  Will regenerate {len(selected_files)} file(s):")
+        for fp in selected_files:
+            try:
+                rel = fp.relative_to(input_dir)
+            except ValueError:
+                rel = fp
+            print(f"    - {rel}")
+        print()
+
+        # Step 5 confirmation
+        choice = input("  Start regeneration? This will overwrite existing output. (y/n): ").strip().lower()
+        if choice in ("y", "yes"):
+            break  # Exit loop, proceed to processing
+        # Otherwise loop back to file selection
 
     # Step 6: Clear state for selected files so they get reprocessed
     for fp in selected_files:
