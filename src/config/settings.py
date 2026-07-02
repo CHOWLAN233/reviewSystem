@@ -75,6 +75,7 @@ class Settings:
     max_retries: int
     retry_base_delay: float
     supported_extensions: tuple = (".pptx", ".ppt", ".pdf")
+    review_mode: str = "basic"  # "off" | "basic" | "deep"
 
     # ---- Logging ----
     log_level: str = "INFO"
@@ -176,6 +177,7 @@ class Settings:
             classification_slide_count=int(_env("CLASSIFICATION_SLIDE_COUNT", "3")),
             max_retries=int(_env("MAX_RETRIES", "3")),
             retry_base_delay=float(_env("RETRY_BASE_DELAY", "2.0")),
+            review_mode=_validate_review_mode(_env("REVIEW_MODE", "basic")),
             log_level=_env("LOG_LEVEL", "INFO").upper(),
             preset=preset_name or None,
         )
@@ -210,3 +212,11 @@ def _try_load_dotenv() -> None:
 def _env(key: str, default: str = "") -> str:
     """Return *key* from ``os.environ``, or *default*."""
     return os.environ.get(key, default)
+
+
+def _validate_review_mode(mode: str) -> str:
+    """Normalize review mode to one of: off, basic, deep."""
+    mode = mode.strip().lower()
+    if mode in ("off", "basic", "deep"):
+        return mode
+    return "basic"

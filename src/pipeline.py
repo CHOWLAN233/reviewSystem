@@ -28,6 +28,7 @@ from .classifier.ai_classifier import AIClassifier, ClassificationResult
 from .generator.summarizer import LectureSummarizer
 from .generator.lab_solver import LabSolver
 from .generator.markdown_writer import MarkdownWriter
+from .generator.review_cleaner import ReviewCleaner, ReviewResult
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,21 @@ class Pipeline:
         self.summarizer = LectureSummarizer(self.summarizer_llm)
         self.lab_solver = LabSolver(self.lab_llm)
         self.writer = MarkdownWriter(settings.output_dir)
+
+        # Secondary review cleaner
+        review_llm = LiteLLMClient(
+            model=settings.classifier_model,  # Use cheaper model for review
+            api_key=settings.classifier_api_key,
+            api_base=settings.classifier_api_base,
+            temperature=0.1,
+            max_tokens=min(settings.classifier_max_tokens, 2048),
+            max_retries=settings.max_retries,
+            retry_base_delay=settings.retry_base_delay,
+        )
+        self.review_cleaner = ReviewCleaner(
+            llm_client=review_llm,
+            review_mode=settings.review_mode,
+        )
 
         # Force reprocessing list
         self._force_files: set[str] = set()
@@ -339,15 +355,24 @@ class Pipeline:
             # d. Summarize
             logger.info(f"[{filename}] Summarizing …")
             summary = self.summarizer.summarize(full_text, classification)
+
+            # e. Secondary review: clean artifacts from the generated Markdown
+            logger.info(f"[{filename}] Reviewing (mode: {self.review_cleaner.review_mode}) …")
+            review_result = self._review_summary(summary, filename)
+            if review_result.changes_made > 0:
+                logger.info(
+                    f"[{filename}] Review: {review_result.changes_made} issue(s) fixed"
+                )
+
             self.writer.write_summary(output_dir, classification, summary, filename)
 
-            # e. Lab solving (if applicable)
+            # f. Lab solving (if applicable)
             if classification.has_lab:
                 logger.info(f"[{filename}] Solving lab …")
                 lab_solution = self.lab_solver.solve(full_text, classification)
                 self.writer.write_lab_solution(output_dir, classification, lab_solution, filename)
 
-            # f. Copy original file into output folder for reference
+            # g. Copy original file into output folder for reference
             self._copy_source_file(filepath, output_dir)
 
             result.status = "processed"
@@ -386,6 +411,37 @@ class Pipeline:
         week_name = self.writer.get_week_folder_name(classification, filename)
         filepath = md_dir / f"{week_name}_summary.md"
         self.writer._atomic_write(filepath, content)
+
+    def _review_summary(self, summary, filename: str) -> ReviewResult:
+        """
+        Run the secondary review on the generated summary content.
+
+        Reviews both the detailed notes and the outline/takeaways sections
+        for code artifacts, garbled text, and formatting issues.
+        """
+        # Concatenate all summary sections for review
+        parts = [summary.detailed_notes, summary.outline, summary.takeaways]
+        combined = "\n\n".join(p for p in parts if p and p.strip())
+
+        if not combined.strip():
+            return ReviewResult(cleaned_content="")
+
+        result = self.review_cleaner.review(combined)
+
+        # Apply cleaned content back to the summary sections
+        if result.changes_made > 0:
+            # The review cleaner returns the full cleaned text.
+            # We apply it primarily to detailed_notes (the largest section)
+            # while keeping other sections intact unless they had issues.
+            cleaned = result.cleaned_content
+            if cleaned and len(cleaned) > 100:
+                # Replace detailed_notes with the cleaned version
+                # (the cleaner preserves all sections, so we replace the
+                #  largest part which is detailed_notes)
+                summary.detailed_notes = cleaned
+                summary.raw_content = cleaned
+
+        return result
 
     @staticmethod
     def _copy_source_file(source_path: Path, output_dir: Path) -> None:

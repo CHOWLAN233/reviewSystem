@@ -166,6 +166,7 @@ def _settings_or_default() -> Settings | None:
             lab_solver_api_base=None, lab_solver_temperature=0.2,
             lab_solver_max_tokens=4096, classification_slide_count=3,
             max_retries=3, retry_base_delay=2.0,
+            review_mode="basic",
         )
 
 
@@ -708,6 +709,7 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
             print(f"  [6] Input Directory:   {current_settings.input_dir}")
             print(f"  [7] Output Directory:  {current_settings.output_dir}")
             print(f"  [8] Log Level:         {current_settings.log_level}")
+            print(f"  [9] Review Mode:       {current_settings.review_mode}")
         else:
             print(f"\n  [1] API Key:          (not set)")
             print(f"  [2] Model Preset:      balanced")
@@ -715,15 +717,19 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
             print(f"  [6] Input Directory:   01_Input_PPTs")
             print(f"  [7] Output Directory:  02_Output_Notes")
             print(f"  [8] Log Level:         INFO")
+            print(f"  [9] Review Mode:       basic")
 
-        print(f"\n  [9] View/edit .env file directly")
-        print(f"  [0] Return to main menu")
+        print(f"\n  [0] View/edit .env file directly")
+        print(f"  [R] Return to main menu")
 
         print()
-        choice = input("  Select a setting to modify (0-9): ").strip()
+        choice = input("  Select a setting to modify (0-9, R=return): ").strip()
 
-        if choice == "0":
+        if choice.upper() == "R":
             break
+        elif choice == "0":
+            _edit_env_file()
+            press_enter()
         elif choice == "1":
             print()
             new_key = input("  Enter new API key (or press Enter to keep current): ").strip()
@@ -801,7 +807,19 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
                 print(f"  [ERROR] Invalid log level. Valid: DEBUG, INFO, WARNING, ERROR")
             press_enter()
         elif choice == "9":
-            _edit_env_file()
+            print()
+            print("  Review mode controls post-processing quality checks:")
+            print("    off   - No review (fastest, may contain artifacts)")
+            print("    basic - Regex-based cleanup (recommended, no extra API cost)")
+            print("    deep  - Full LLM review pass (most thorough, extra API call)")
+            print()
+            new_mode = input("  Enter review mode (off/basic/deep): ").strip().lower()
+            if new_mode in ("off", "basic", "deep"):
+                os.environ["REVIEW_MODE"] = new_mode
+                _update_env_file("REVIEW_MODE", new_mode)
+                print(f"  [OK] Review mode set to: {new_mode}")
+            else:
+                print(f"  [ERROR] Invalid mode. Valid: off, basic, deep")
             press_enter()
         else:
             print("  Invalid choice.")
