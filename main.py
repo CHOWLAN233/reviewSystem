@@ -8,6 +8,7 @@ into structured Markdown review notes and PDF exports.
 Usage:
     python main.py          # Interactive menu mode
     python main.py --help   # Show legacy CLI flags (batch mode)
+    python main.py --version  # Show version
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import argparse
 import json
 import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
 import textwrap
 from datetime import datetime
@@ -31,6 +35,8 @@ from src.pipeline import Pipeline, ProcessingReport
 from src.scanner.file_scanner import FileScanner
 from src.scanner.state_manager import StateManager
 
+VERSION = "2.0.0"
+
 logger = logging.getLogger("main")
 
 
@@ -43,12 +49,20 @@ def clear_screen() -> None:
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def setup_logging(level: str = "INFO") -> None:
-    """Configure root logger with a simple console format."""
+def setup_logging(level: str = "INFO", log_file: str | None = None) -> None:
+    """Configure root logger with console and optional file output."""
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+
+    if log_file:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)-7s] %(name)s - %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
     )
 
 
@@ -77,13 +91,218 @@ def open_folder(path: Path) -> None:
         if os.name == "nt":
             os.startfile(str(path))
         elif sys.platform == "darwin":
-            import subprocess
             subprocess.run(["open", str(path)], check=False)
         else:
-            import subprocess
             subprocess.run(["xdg-open", str(path)], check=False)
     except Exception as e:
         print(f"  [WARN] Could not open folder: {e}")
+
+
+# ======================================================================
+# Validation helpers
+# ======================================================================
+
+_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][\w./-]+$")
+
+
+def _validate_model_name(name: str) -> str | None:
+    """
+    Validate a model identifier string.
+
+    Returns an error message string if invalid, or None if valid.
+    """
+    if not name or not name.strip():
+        return "Model name cannot be empty"
+    if not _MODEL_NAME_RE.match(name.strip()):
+        return "Model name should be in the format: provider/model-name (e.g. gemini/gemini-2.0-flash)"
+    if "/" not in name.strip():
+        return "Model name should include a provider prefix (e.g. 'gemini/', 'claude-', 'deepseek/')"
+    return None
+
+
+def _validate_directory(path_str: str) -> str | None:
+    """
+    Validate a directory path string.
+
+    Returns an error message string if invalid, or None if valid.
+    Does NOT require the directory to exist yet (it will be created).
+    """
+    if not path_str or not path_str.strip():
+        return "Path cannot be empty"
+    p = Path(path_str.strip())
+    if p.is_absolute():
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            return f"Cannot access parent directory: {e}"
+    return None
+
+
+# ======================================================================
+# Settings factory (avoids hardcoded fallback duplication)
+# ======================================================================
+
+def _settings_or_default() -> Settings | None:
+    """
+    Try to load Settings from env, returning None on failure.
+
+    This factory is used by menus 2 and 3 which only need path
+    information and do not require an API key.
+    """
+    try:
+        return Settings.from_env()
+    except ValueError:
+        # Return a bare-minimum Settings for path-only operations
+        return Settings(
+            input_dir=_PROJECT_ROOT / "01_Input_PPTs",
+            output_dir=_PROJECT_ROOT / "02_Output_Notes",
+            state_file=_PROJECT_ROOT / ".sync_state.json",
+            classifier_model="", classifier_api_key="",
+            classifier_api_base=None, classifier_temperature=0.1,
+            classifier_max_tokens=512, summarizer_model="",
+            summarizer_api_key="", summarizer_api_base=None,
+            summarizer_temperature=0.3, summarizer_max_tokens=4096,
+            lab_solver_model="", lab_solver_api_key="",
+            lab_solver_api_base=None, lab_solver_temperature=0.2,
+            lab_solver_max_tokens=4096, classification_slide_count=3,
+            max_retries=3, retry_base_delay=2.0,
+        )
+
+
+# ======================================================================
+# .env helpers
+# ======================================================================
+
+# Version marker written into .env to detect when .env.example has new keys
+_ENV_VERSION = "2"
+
+
+def _ensure_env_file() -> Path:
+    """Ensure .env exists (copy from .env.example if needed). Return its path."""
+    env_path = _PROJECT_ROOT / ".env"
+    example_path = _PROJECT_ROOT / ".env.example"
+
+    if not env_path.exists() and example_path.exists():
+        shutil.copy(example_path, env_path)
+        logger.info("Created .env from .env.example template")
+
+    if not env_path.exists():
+        env_path.write_text(f"# Review Agent v{VERSION} configuration\nAPI_KEY=sk-your-api-key-here\n", encoding="utf-8")
+
+    return env_path
+
+
+def _update_env_file(key: str, value: str) -> None:
+    """
+    Update or add a key-value pair in the .env file.
+
+    - Skips commented-out lines (does not match ``# KEY=...``)
+    - Replaces existing active key, or appends if not found
+    """
+    env_path = _ensure_env_file()
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    found = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # Skip comments
+        if stripped.startswith("#"):
+            continue
+        # Match active KEY=value line
+        if stripped.startswith(f"{key}=") or line.lstrip().startswith(f"{key}="):
+            # Preserve any leading whitespace on this line
+            leading = line[:len(line) - len(line.lstrip())]
+            lines[i] = f"{leading}{key}={value}"
+            found = True
+            break
+
+    if not found:
+        lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _check_env_version() -> None:
+    """
+    Compare .env.example against .env and warn if the template has
+    new keys not present in the user's .env file.
+    """
+    env_path = _PROJECT_ROOT / ".env"
+    example_path = _PROJECT_ROOT / ".env.example"
+
+    if not env_path.exists() or not example_path.exists():
+        return
+
+    # Parse active (non-comment) keys from both files
+    def _active_keys(path: Path) -> set[str]:
+        keys: set[str] = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or "=" not in stripped:
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            if key:
+                keys.add(key)
+        return keys
+
+    env_keys = _active_keys(env_path)
+    example_keys = _active_keys(example_path)
+    missing = example_keys - env_keys
+
+    if missing:
+        print(f"\n  [INFO] .env.example has new config keys not in your .env file:")
+        for k in sorted(missing):
+            print(f"         - {k}")
+        print(f"  Consider reviewing .env.example for new options.")
+
+
+# ======================================================================
+# CJK font detection for PDF export
+# ======================================================================
+
+_CJK_FONT_CANDIDATES = {
+    "Windows": [
+        "C:/Windows/Fonts/msyh.ttc",       # Microsoft YaHei
+        "C:/Windows/Fonts/simsun.ttc",     # SimSun
+    ],
+    "Darwin": [
+        "/System/Library/Fonts/PingFang.ttc",          # PingFang SC
+        "/System/Library/Fonts/STHeiti Light.ttc",     # Heiti SC
+    ],
+    "Linux": [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    ],
+}
+
+
+def _check_cjk_fonts() -> bool:
+    """
+    Check if CJK fonts are available on this system for PDF export.
+
+    Returns True if at least one CJK font is found.
+    """
+    candidates = _CJK_FONT_CANDIDATES.get(sys.platform.capitalize() if sys.platform == "darwin" else
+                                          "Windows" if os.name == "nt" else "Linux", [])
+
+    for path in candidates:
+        if Path(path).exists():
+            return True
+    return False
+
+
+def _warn_missing_cjk_fonts() -> None:
+    """Print a warning if CJK fonts are not found."""
+    if not _check_cjk_fonts():
+        print("\n  [WARN] No CJK (Chinese/Japanese/Korean) fonts detected on this system.")
+        print("  PDF export may show blank squares instead of Chinese characters.")
+        if sys.platform == "linux" or (sys.platform == "linux2"):
+            print("  Install with: sudo apt install fonts-noto-cjk")
+        elif sys.platform == "darwin":
+            print("  PingFang SC should be installed by default. Check System Preferences.")
+        elif os.name == "nt":
+            print("  Microsoft YaHei should be installed by default on Chinese Windows.")
 
 
 # ======================================================================
@@ -94,9 +313,12 @@ def menu_upload(settings: Settings) -> None:
     """
     Option 1: Upload and process files.
 
-    Prompts the user to place PPT/PDF files in the input directory,
-    then scans, detects new/changed files, and processes them with
-    a real-time progress bar.
+    1. Opens the input folder for the user to drop files in.
+    2. Scans and lists all detected PPT/PDF files.
+    3. Allows the user to select which files to process (or all).
+    4. Processes selected files with a real-time progress bar.
+    5. Optionally converts output to PDF.
+    6. Opens the output folder on completion.
     """
     clear_screen()
     print_header("Upload & Process Files")
@@ -119,6 +341,8 @@ def menu_upload(settings: Settings) -> None:
     print()
 
     input("  Press Enter after you have added your files...")
+
+    # Scan for files
     scanner = FileScanner(input_dir, settings.supported_extensions)
     files = scanner.scan()
 
@@ -128,13 +352,13 @@ def menu_upload(settings: Settings) -> None:
         press_enter()
         return
 
-    print(f"  [INFO] Found {len(files)} supported file(s):")
-    for fp in files:
+    print(f"\n  [INFO] Found {len(files)} supported file(s):")
+    for i, fp in enumerate(files, 1):
         try:
             rel = fp.relative_to(input_dir)
         except ValueError:
             rel = fp
-        print(f"    - {rel}")
+        print(f"    [{i}] {rel}")
     print()
 
     # Check against state to find new/changed
@@ -147,8 +371,55 @@ def menu_upload(settings: Settings) -> None:
         press_enter()
         return
 
+    # Mark which files are new/changed
+    new_set = set(new_or_changed)
     print(f"  [INFO] {len(new_or_changed)} file(s) need processing:")
-    for fp in new_or_changed:
+    new_indices: list[int] = []
+    for i, fp in enumerate(files, 1):
+        tag = " [NEW/MODIFIED]" if fp in new_set else " [up-to-date]"
+        try:
+            rel = fp.relative_to(input_dir)
+        except ValueError:
+            rel = fp
+        print(f"    [{i}] {rel}{tag}")
+        if fp in new_set:
+            new_indices.append(i)
+    print()
+
+    # File selection
+    print("  Select which files to process:")
+    print("    - Press Enter to process ALL new/modified files")
+    print("    - Enter file numbers separated by commas (e.g. 1,3,5)")
+    print("    - Type 'all' to process everything including up-to-date files")
+    print()
+    selection = input("  Your choice: ").strip().lower()
+
+    selected_files: list[Path] = []
+    if selection == "":
+        # Default: all new/changed
+        selected_files = list(new_or_changed)
+    elif selection == "all":
+        selected_files = list(files)
+    else:
+        # Parse comma-separated indices
+        try:
+            indices = [int(x.strip()) for x in selection.split(",") if x.strip()]
+            for idx in indices:
+                if 1 <= idx <= len(files):
+                    selected_files.append(files[idx - 1])
+                else:
+                    print(f"  [WARN] Invalid index {idx}, skipping.")
+        except ValueError:
+            print("  [ERROR] Invalid input. Processing all new/modified files instead.")
+            selected_files = list(new_or_changed)
+
+    if not selected_files:
+        print("  [INFO] No files selected. Cancelled.")
+        press_enter()
+        return
+
+    print(f"\n  [INFO] Will process {len(selected_files)} file(s):")
+    for fp in selected_files:
         try:
             rel = fp.relative_to(input_dir)
         except ValueError:
@@ -175,26 +446,39 @@ def menu_upload(settings: Settings) -> None:
 
     print()
     try:
-        report = pipeline.run(progress_callback=cli_progress)
+        # Force only the selected files
+        force_names = [fp.name for fp in selected_files]
+        report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
         print()  # newline after progress bar
         print_report(report)
 
         # Offer PDF conversion
         print()
-        pdf_choice = input("  Convert generated notes to PDF? (y/n): ").strip().lower()
-        if pdf_choice in ("y", "yes"):
-            print_bar("PDF Conversion")
-            try:
-                from convert_md_to_pdf import convert_all
-                convert_all(settings.output_dir)
-            except ImportError as exc:
-                print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
-                print("  Install with: pip install playwright && python -m playwright install chromium")
-            except Exception as exc:
-                print(f"  [ERROR] PDF conversion failed: {exc}")
+        if report.processed > 0:
+            # Check CJK fonts before offering PDF conversion
+            _warn_missing_cjk_fonts()
+
+            pdf_choice = input("\n  Convert generated notes to PDF? (y/n): ").strip().lower()
+            if pdf_choice in ("y", "yes"):
+                print_bar("PDF Conversion")
+                try:
+                    from convert_md_to_pdf import convert_all
+                    convert_all(settings.output_dir)
+                except ImportError as exc:
+                    print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
+                    print("  Install with: pip install playwright && python -m playwright install chromium")
+                except Exception as exc:
+                    print(f"  [ERROR] PDF conversion failed: {exc}")
 
     except KeyboardInterrupt:
-        print("\n\n  Interrupted by user.")
+        print("\n\n  [INFO] Interrupted by user. Partial results have been saved.")
+        # State is already partially saved by pipeline; finalize what we have
+        try:
+            state = state_mgr.load_state()
+            state_mgr.save_state(state)
+            print("  [INFO] Processing state saved for completed files.")
+        except Exception:
+            pass
     except Exception as exc:
         logger.exception(f"Fatal error: {exc}")
         print(f"\n  [ERROR] Pipeline failed: {exc}")
@@ -214,6 +498,7 @@ def menu_view_output(settings: Settings) -> None:
     Option 2: View exported PDF files and output structure.
 
     Displays the output directory tree with PDF and MD files.
+    Press 'o' to open the output folder in file explorer.
     """
     clear_screen()
     print_header("View Exported Files")
@@ -224,7 +509,11 @@ def menu_view_output(settings: Settings) -> None:
         print(f"\n  [INFO] Output directory does not exist yet.")
         print(f"  Expected location: {output_dir.resolve()}")
         print("  Run 'Upload & Process Files' first to generate notes.")
-        press_enter()
+        print()
+        print("  Press 'o' to open parent directory, or Enter to go back.")
+        choice = input("  > ").strip().lower()
+        if choice == "o":
+            open_folder(output_dir.parent.resolve())
         return
 
     # Find all PDF and MD files
@@ -234,7 +523,11 @@ def menu_view_output(settings: Settings) -> None:
     if not pdf_files and not md_files:
         print(f"\n  [INFO] No PDF or MD files found in output directory.")
         print(f"  Location: {output_dir.resolve()}")
-        press_enter()
+        print()
+        print("  Press 'o' to open the output folder, or Enter to go back.")
+        choice = input("  > ").strip().lower()
+        if choice == "o":
+            open_folder(output_dir.resolve())
         return
 
     print(f"\n  Output directory: {output_dir.resolve()}")
@@ -268,7 +561,11 @@ def menu_view_output(settings: Settings) -> None:
                 rel = f
             print(f"    - {rel}")
 
-    press_enter()
+    print()
+    print("  Press 'o' to open the output folder, or Enter to go back.")
+    choice = input("  > ").strip().lower()
+    if choice == "o":
+        open_folder(output_dir.resolve())
 
 
 def _print_tree(directory: Path, prefix: str, max_depth: int, current_depth: int) -> None:
@@ -386,12 +683,14 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
     clear_screen()
     print_header("Settings")
 
+    # Check for new .env keys
+    _check_env_version()
+
     # Load current values from environment
     if current_settings is None:
         try:
             current_settings = Settings.from_env()
         except ValueError:
-            # No API key set yet -- create a minimal placeholder
             pass
 
     while True:
@@ -400,7 +699,8 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
 
         # Display current configuration
         if current_settings:
-            print(f"\n  [1] API Key:          {'***' + current_settings.classifier_api_key[-4:] if current_settings.classifier_api_key else '(not set)'}")
+            key_display = "***" + current_settings.classifier_api_key[-4:] if len(current_settings.classifier_api_key) >= 4 else "(not set)"
+            print(f"\n  [1] API Key:          {key_display}")
             print(f"  [2] Model Preset:      {current_settings.preset or 'custom'}")
             print(f"  [3] Classifier Model:  {current_settings.classifier_model}")
             print(f"  [4] Summarizer Model:  {current_settings.summarizer_model}")
@@ -428,6 +728,12 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
             print()
             new_key = input("  Enter new API key (or press Enter to keep current): ").strip()
             if new_key:
+                if len(new_key) < 8:
+                    print("  [WARN] API key seems too short (< 8 chars). Are you sure?")
+                    confirm = input("  Continue anyway? (y/n): ").strip().lower()
+                    if confirm not in ("y", "yes"):
+                        press_enter()
+                        continue
                 os.environ["API_KEY"] = new_key
                 _update_env_file("API_KEY", new_key)
                 print("  [OK] API key updated.")
@@ -445,46 +751,42 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
                 print(f"  [OK] Preset set to '{new_preset}'.")
             else:
                 print(f"  [ERROR] Unknown preset: {new_preset}")
+                print(f"  Valid options: {', '.join(MODEL_PRESETS.keys())}")
             press_enter()
-        elif choice == "3":
+        elif choice in ("3", "4", "5"):
+            model_type = {"3": "classifier", "4": "summarizer", "5": "lab solver"}[choice]
+            env_key = {"3": "CLASSIFIER_MODEL", "4": "SUMMARIZER_MODEL", "5": "LAB_SOLVER_MODEL"}[choice]
+            examples = {"3": "gemini/gemini-2.0-flash", "4": "claude-sonnet-4-20250514", "5": "deepseek/deepseek-chat"}[choice]
             print()
-            new_model = input("  Enter classifier model (e.g. gemini/gemini-2.0-flash): ").strip()
+            new_model = input(f"  Enter {model_type} model (e.g. {examples}): ").strip()
             if new_model:
-                os.environ["CLASSIFIER_MODEL"] = new_model
-                _update_env_file("CLASSIFIER_MODEL", new_model)
-                print("  [OK] Classifier model updated.")
+                error = _validate_model_name(new_model)
+                if error:
+                    print(f"  [WARN] {error}")
+                    confirm = input("  Save anyway? (y/n): ").strip().lower()
+                    if confirm not in ("y", "yes"):
+                        press_enter()
+                        continue
+                os.environ[env_key] = new_model
+                _update_env_file(env_key, new_model)
+                print(f"  [OK] {model_type.capitalize()} model updated.")
             press_enter()
-        elif choice == "4":
+        elif choice in ("6", "7"):
+            dir_type = "input" if choice == "6" else "output"
+            env_key = "INPUT_DIR" if choice == "6" else "OUTPUT_DIR"
             print()
-            new_model = input("  Enter summarizer model (e.g. claude-sonnet-4-20250514): ").strip()
-            if new_model:
-                os.environ["SUMMARIZER_MODEL"] = new_model
-                _update_env_file("SUMMARIZER_MODEL", new_model)
-                print("  [OK] Summarizer model updated.")
-            press_enter()
-        elif choice == "5":
-            print()
-            new_model = input("  Enter lab solver model (e.g. deepseek/deepseek-chat): ").strip()
-            if new_model:
-                os.environ["LAB_SOLVER_MODEL"] = new_model
-                _update_env_file("LAB_SOLVER_MODEL", new_model)
-                print("  [OK] Lab solver model updated.")
-            press_enter()
-        elif choice == "6":
-            print()
-            new_dir = input("  Enter new input directory path: ").strip()
+            new_dir = input(f"  Enter new {dir_type} directory path: ").strip()
             if new_dir:
-                os.environ["INPUT_DIR"] = new_dir
-                _update_env_file("INPUT_DIR", new_dir)
-                print(f"  [OK] Input directory set to: {new_dir}")
-            press_enter()
-        elif choice == "7":
-            print()
-            new_dir = input("  Enter new output directory path: ").strip()
-            if new_dir:
-                os.environ["OUTPUT_DIR"] = new_dir
-                _update_env_file("OUTPUT_DIR", new_dir)
-                print(f"  [OK] Output directory set to: {new_dir}")
+                error = _validate_directory(new_dir)
+                if error:
+                    print(f"  [ERROR] {error}")
+                    press_enter()
+                    continue
+                os.environ[env_key] = new_dir
+                _update_env_file(env_key, new_dir)
+                # Create the directory
+                Path(new_dir).mkdir(parents=True, exist_ok=True)
+                print(f"  [OK] {dir_type.capitalize()} directory set to: {new_dir}")
             press_enter()
         elif choice == "8":
             print()
@@ -496,7 +798,7 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
                 setup_logging(new_level)
                 print(f"  [OK] Log level set to: {new_level}")
             else:
-                print(f"  [ERROR] Invalid log level.")
+                print(f"  [ERROR] Invalid log level. Valid: DEBUG, INFO, WARNING, ERROR")
             press_enter()
         elif choice == "9":
             _edit_env_file()
@@ -514,47 +816,9 @@ def menu_settings(current_settings: Settings | None) -> Settings | None:
     return current_settings
 
 
-def _update_env_file(key: str, value: str) -> None:
-    """Update or add a key-value pair in the .env file."""
-    env_path = _PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        # Copy from .env.example if .env doesn't exist
-        example_path = _PROJECT_ROOT / ".env.example"
-        if example_path.exists():
-            import shutil
-            shutil.copy(example_path, env_path)
-
-    if not env_path.exists():
-        # Create fresh
-        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
-        return
-
-    lines = env_path.read_text(encoding="utf-8").splitlines()
-    found = False
-    for i, line in enumerate(lines):
-        if line.startswith(f"{key}=") or line.startswith(f"# {key}="):
-            lines[i] = f"{key}={value}"
-            found = True
-            break
-
-    if not found:
-        lines.append(f"{key}={value}")
-
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def _edit_env_file() -> None:
-    """Open the .env file for manual editing."""
-    env_path = _PROJECT_ROOT / ".env"
-    if not env_path.exists():
-        example_path = _PROJECT_ROOT / ".env.example"
-        if example_path.exists():
-            import shutil
-            shutil.copy(example_path, env_path)
-
-    if not env_path.exists():
-        print("  [ERROR] No .env or .env.example file found.")
-        return
+    """Display the .env file contents (with masked API keys) for review."""
+    env_path = _ensure_env_file()
 
     print(f"\n  .env file location: {env_path.resolve()}")
     print()
@@ -563,11 +827,14 @@ def _edit_env_file() -> None:
     content = env_path.read_text(encoding="utf-8")
     for line in content.splitlines():
         # Mask API keys in display
-        if line.startswith("API_KEY=") or line.startswith("CLASSIFIER_API_KEY=") or \
-           line.startswith("SUMMARIZER_API_KEY=") or line.startswith("LAB_SOLVER_API_KEY="):
+        if any(line.strip().startswith(k) for k in (
+            "API_KEY=", "CLASSIFIER_API_KEY=",
+            "SUMMARIZER_API_KEY=", "LAB_SOLVER_API_KEY=",
+        )):
             parts = line.split("=", 1)
             if len(parts) == 2 and len(parts[1]) > 4:
-                print(f"  {parts[0]}={'*' * (len(parts[1]) - 4)}{parts[1][-4:]}")
+                prefix = line[:len(line) - len(line.lstrip())]
+                print(f"  {prefix}{parts[0]}={'*' * (len(parts[1]) - 4)}{parts[1][-4:]}")
             else:
                 print(f"  {line}")
         else:
@@ -610,12 +877,18 @@ def legacy_main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             Examples:
-              python main.py                           Process all new/changed files
-              python main.py --dry-run                 Preview what would be processed
-              python main.py --force lecture1.pptx     Force reprocess a specific file
-              python main.py --preset budget           Use budget-friendly models
+              python main.py                              Process all new/changed files
+              python main.py --dry-run                    Preview what would be processed
+              python main.py --force lecture1.pptx        Force reprocess a specific file
+              python main.py --preset budget              Use budget-friendly models
               python main.py --input ./my_ppts --output ./my_notes
+              python main.py --pdf --log-file agent.log   Process with PDF export + log to file
         """),
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"Review Agent v{VERSION}",
+        help="Show version and exit",
     )
     parser.add_argument(
         "--input", type=Path, default=None,
@@ -643,12 +916,16 @@ def legacy_main() -> None:
         help="Logging verbosity (default: INFO)",
     )
     parser.add_argument(
+        "--log-file", type=str, default=None,
+        help="Write logs to a file in addition to console output",
+    )
+    parser.add_argument(
         "--pdf", action="store_true",
         help="Convert generated Markdown notes to PDF (requires playwright + chromium)",
     )
     args = parser.parse_args()
 
-    setup_logging(args.log_level)
+    setup_logging(args.log_level, log_file=args.log_file)
     logger = logging.getLogger("main")
 
     # ---- Build settings ----
@@ -670,6 +947,7 @@ def legacy_main() -> None:
         print("Copy .env.example to .env and fill in your API key(s).", file=sys.stderr)
         sys.exit(1)
 
+    logger.info(f"Review Agent v{VERSION}")
     logger.info(f"Input directory : {settings.input_dir}")
     logger.info(f"Output directory: {settings.output_dir}")
     logger.info(f"Classifier      : {settings.classifier_model}")
@@ -713,7 +991,15 @@ def legacy_main() -> None:
             except Exception as exc:
                 logger.error(f"PDF conversion failed: {exc}")
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user.", file=sys.stderr)
+        print("\n\nInterrupted by user. Partial results saved.", file=sys.stderr)
+        # Save whatever progress was made
+        try:
+            from src.scanner.state_manager import StateManager
+            mgr = StateManager(settings.state_file)
+            state = mgr.load_state()
+            mgr.save_state(state)
+        except Exception:
+            pass
         sys.exit(130)
     except Exception as exc:
         logger.exception(f"Fatal error: {exc}")
@@ -728,18 +1014,17 @@ def interactive_main() -> None:
     """Run the Review Agent in interactive CLI menu mode."""
     setup_logging("INFO")
 
+    # Check .env version
+    _check_env_version()
+
     # Load settings
-    settings = None
-    try:
-        settings = Settings.from_env()
-    except ValueError:
-        pass  # Will prompt user to configure
+    settings = _settings_or_default()
 
     while True:
         clear_screen()
         print()
         print("=" * 60)
-        print("         Review Agent v1.0")
+        print(f"         Review Agent v{VERSION}")
         print("    AI-Powered Lecture Note Generator")
         print("=" * 60)
         print()
@@ -752,9 +1037,14 @@ def interactive_main() -> None:
 
         # Quick status line
         if settings:
-            input_count = FileScanner(settings.input_dir, settings.supported_extensions).get_file_count()
+            try:
+                input_count = FileScanner(settings.input_dir, settings.supported_extensions).get_file_count()
+                key_ok = bool(settings.classifier_api_key)
+            except ValueError:
+                input_count = 0
+                key_ok = False
             print(f"  Status: {input_count} file(s) in input | "
-                  f"API key: {'configured' if settings.classifier_api_key else 'MISSING'}"
+                  f"API key: {'configured' if key_ok else 'MISSING'}"
                   f" | Preset: {settings.preset or 'custom'}")
         else:
             print(f"  Status: API key NOT configured. Go to [4] Settings to set up.")
@@ -763,8 +1053,7 @@ def interactive_main() -> None:
         choice = input("  Select an option [1-5]: ").strip()
 
         if choice == "1":
-            # Reload settings (may have been changed in menu 4)
-            if settings is None:
+            if settings is None or not settings.classifier_api_key:
                 try:
                     settings = Settings.from_env()
                 except ValueError as exc:
@@ -774,53 +1063,15 @@ def interactive_main() -> None:
                     continue
             menu_upload(settings)
         elif choice == "2":
-            if settings is None:
-                try:
-                    settings = Settings.from_env()
-                except ValueError:
-                    settings = Settings(
-                        input_dir=_PROJECT_ROOT / "01_Input_PPTs",
-                        output_dir=_PROJECT_ROOT / "02_Output_Notes",
-                        state_file=_PROJECT_ROOT / ".sync_state.json",
-                        classifier_model="", classifier_api_key="",
-                        classifier_api_base=None, classifier_temperature=0.1,
-                        classifier_max_tokens=512, summarizer_model="",
-                        summarizer_api_key="", summarizer_api_base=None,
-                        summarizer_temperature=0.3, summarizer_max_tokens=4096,
-                        lab_solver_model="", lab_solver_api_key="",
-                        lab_solver_api_base=None, lab_solver_temperature=0.2,
-                        lab_solver_max_tokens=4096, classification_slide_count=3,
-                        max_retries=3, retry_base_delay=2.0,
-                    )
+            settings = _settings_or_default()
             menu_view_output(settings)
         elif choice == "3":
-            if settings is None:
-                try:
-                    settings = Settings.from_env()
-                except ValueError:
-                    settings = Settings(
-                        input_dir=_PROJECT_ROOT / "01_Input_PPTs",
-                        output_dir=_PROJECT_ROOT / "02_Output_Notes",
-                        state_file=_PROJECT_ROOT / ".sync_state.json",
-                        classifier_model="", classifier_api_key="",
-                        classifier_api_base=None, classifier_temperature=0.1,
-                        classifier_max_tokens=512, summarizer_model="",
-                        summarizer_api_key="", summarizer_api_base=None,
-                        summarizer_temperature=0.3, summarizer_max_tokens=4096,
-                        lab_solver_model="", lab_solver_api_key="",
-                        lab_solver_api_base=None, lab_solver_temperature=0.2,
-                        lab_solver_max_tokens=4096, classification_slide_count=3,
-                        max_retries=3, retry_base_delay=2.0,
-                    )
+            settings = _settings_or_default()
             menu_history(settings)
         elif choice == "4":
             settings = menu_settings(settings)
-            # Reload after settings changes
             if settings is None:
-                try:
-                    settings = Settings.from_env()
-                except ValueError:
-                    settings = None
+                settings = _settings_or_default()
         elif choice == "5":
             print("\n  Goodbye!")
             sys.exit(0)

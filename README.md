@@ -1,4 +1,4 @@
-# Review Agent
+# Review Agent v2.0
 
 AI 驱动的课程笔记生成器，将 PPT/PDF 课件材料转换为结构化的 Markdown 笔记和 PDF 文件。
 
@@ -57,7 +57,7 @@ cp .env.example .env
 API_KEY=sk-your-api-key-here
 ```
 
-也可以进入程序后在 [4] Settings 菜单中配置。
+也可以进入程序后在 `[4] Settings` 菜单中配置。
 
 ### 4. 添加课程文件
 
@@ -87,7 +87,7 @@ python main.py
 
 ```
 ============================================================
-         Review Agent v1.0
+         Review Agent v2.0
     AI-Powered Lecture Note Generator
 ============================================================
 
@@ -100,22 +100,31 @@ python main.py
 
 ### [1] Upload & Process Files -- 上传并处理文件
 
-- 程序会扫描输入文件夹，列出发现的 PPT/PDF 文件
-- 自动检测新增或修改的文件（通过 MD5 哈希比对）
-- 显示哪些文件需要处理，确认后开始
-- 实时显示处理进度条
-- 处理完成后可选择是否导出 PDF
+- 自动打开输入文件夹，方便用户拖入文件
+- 按 Enter 后扫描文件夹，列出所有支持的 PPT/PDF 文件
+- 标记每个文件的状态: `[NEW/MODIFIED]` 或 `[up-to-date]`
+- 支持文件选择:
+  - 直接按 Enter: 处理所有新增/修改的文件 (默认)
+  - 输入序号如 `1,3,5`: 只处理指定的文件
+  - 输入 `all`: 强制处理所有文件 (包括已处理过的)
+- 确认后开始处理，实时显示进度条
+- 处理完成后提示是否导出 PDF
+  - 导出前自动检测系统中文字体是否可用
+- 自动打开输出文件夹展示结果
+- 按 Ctrl+C 中断时自动保存已完成文件的状态
 
 ### [2] View Exported PDFs / Output -- 查看导出文件
 
-- 显示输出目录的完整结构
-- 列出所有已生成的 PDF 和 Markdown 文件
-- 显示每个文件的大小和路径
+- 显示输出目录的完整目录树结构
+- 列出所有已生成的 PDF 和 Markdown 文件及其大小
+- 按 `o` 键直接在文件管理器中打开输出文件夹
+- 按 Enter 返回主菜单
 
 ### [3] Processing History -- 处理历史
 
 - 显示所有已处理文件的记录（来源：`.sync_state.json`）
-- 包含文件名、处理状态、处理时间、输出路径
+- 包含: 文件名、处理状态、处理时间、输出路径
+- 按状态统计: processed / errors / skipped
 - 支持查看原始 JSON 数据
 - 支持清除/重置处理历史
 
@@ -123,17 +132,19 @@ python main.py
 
 可以在菜单中修改以下配置（修改后自动写入 `.env` 文件）：
 
-| 设置项 | 说明 |
-|--------|------|
-| API Key | LLM API 密钥 |
-| Model Preset | 模型预设 (budget / balanced / maximum) |
-| Classifier Model | 分类模型 (默认 gemini flash) |
-| Summarizer Model | 总结模型 (默认 claude sonnet) |
-| Lab Solver Model | 实验解答模型 |
-| Input Directory | 输入文件夹路径 |
-| Output Directory | 输出文件夹路径 |
-| Log Level | 日志级别 (DEBUG / INFO / WARNING / ERROR) |
-| View/Edit .env | 直接查看和编辑 .env 文件 |
+| 设置项 | 说明 | 校验 |
+|--------|------|------|
+| API Key | LLM API 密钥 | 长度 >= 8 才保存 |
+| Model Preset | 模型预设 (budget / balanced / maximum) | 必须为有效预设名 |
+| Classifier Model | 分类模型 | 格式: provider/model-name |
+| Summarizer Model | 总结模型 | 格式: provider/model-name |
+| Lab Solver Model | 实验解答模型 | 格式: provider/model-name |
+| Input Directory | 输入文件夹路径 | 检查父目录可访问性 |
+| Output Directory | 输出文件夹路径 | 检查父目录可访问性 |
+| Log Level | 日志级别 | DEBUG/INFO/WARNING/ERROR |
+| View/Edit .env | 直接查看 .env 内容 | API key 自动掩码显示 |
+
+- 启动时自动检测 `.env` 中是否有缺失的配置项（对比 `.env.example`），并提示用户
 
 ### [5] Exit -- 退出
 
@@ -146,6 +157,7 @@ python main.py
 除了交互式菜单，也支持命令行参数进行批量处理：
 
 ```bash
+# 基本用法
 python main.py --preset budget              # 使用经济型模型
 python main.py --dry-run                    # 仅预览分类，不消耗 token
 python main.py --force file1.pptx           # 强制重新处理指定文件
@@ -153,6 +165,11 @@ python main.py --input ./my_ppts            # 自定义输入目录
 python main.py --output ./my_notes          # 自定义输出目录
 python main.py --pdf                        # 处理完成自动导出 PDF
 python main.py --log-level DEBUG            # 详细日志
+
+# 新增功能
+python main.py --version                    # 查看版本号
+python main.py --log-file agent.log         # 同时将日志写入文件
+python main.py --pdf --log-file run.log     # 组合使用
 ```
 
 ---
@@ -162,7 +179,7 @@ python main.py --log-level DEBUG            # 详细日志
 ```
 02_Output_Notes/
 └── {Course_Name}/                    # 课程文件夹
-    ├── md/                           # 所有课程的 Markdown 笔记 (课程级别)
+    ├── md/                           # Markdown 笔记 (课程级别)
     │   ├── Week_01_Topic_summary.md
     │   ├── Week_01_Topic_lab_solution.md
     │   ├── Week_02_Topic_summary.md
@@ -175,7 +192,7 @@ python main.py --log-level DEBUG            # 详细日志
         └── ...
 ```
 
-Markdown 文件统一放在课程级别的 `md/` 子文件夹中，而不是分散在每周的子文件夹里。
+Markdown 文件统一放在课程级别的 `md/` 子文件夹中，便于集中管理和搜索。
 
 ---
 
@@ -198,6 +215,31 @@ LAB_SOLVER_MODEL=deepseek/deepseek-chat
 
 ---
 
+## 跨平台支持
+
+| 平台 | 状态 | 中文字体 (PDF) |
+|------|------|---------------|
+| Windows 11 | 完全支持 | Microsoft YaHei (系统自带) |
+| macOS | 完全支持 | PingFang SC (系统自带) |
+| Linux | 完全支持 | 需安装 `fonts-noto-cjk` |
+
+### Linux 中文字体安装
+
+```bash
+# Debian / Ubuntu
+sudo apt install fonts-noto-cjk
+
+# Fedora
+sudo dnf install google-noto-cjk-fonts
+
+# Arch
+sudo pacman -S noto-fonts-cjk
+```
+
+程序在导出 PDF 前会自动检测系统中文字体，如缺失会给出安装提示。
+
+---
+
 ## 工作原理
 
 ```
@@ -209,14 +251,17 @@ PPT/PDF -> 提取文本 -> AI 分类 -> AI 总结
 - **增量同步**: 使用 MD5 哈希追踪处理状态，仅处理新增或修改的文件
 - **多模型**: LiteLLM 支持一行切换模型 (Gemini、Claude、DeepSeek、Ollama 等)
 - **两步 AI**: 廉价模型用于分类，强大模型用于内容生成
-- **容错性**: 单文件隔离，一个文件出错不会中断整批处理
+- **容错性**: 单文件隔离，一个文件出错不会中断整批处理；Ctrl+C 中断时自动保存已完成的文件状态
+- **文件选择**: 支持按序号选择要处理的文件，灵活控制处理范围
+- **配置校验**: 模型名称和路径在保存前会进行格式校验，减少配置错误
+- **版本提醒**: 自动对比 `.env.example` 检测新增的配置项
 
 ---
 
 ## 支持的文件格式
 
 - `.pptx` -- PowerPoint 演示文稿 (文本 + 演讲者备注)
-- `.ppt` -- 旧版 PowerPoint (支持有限)
+- `.ppt` -- 旧版 PowerPoint (支持有限，使用二进制提取)
 - `.pdf` -- PDF 文档
 
 > 注意: 当前版本仅提取文本。对于图片较多的幻灯片，请使用支持 Vision 的 LLM 模型。
@@ -227,7 +272,7 @@ PPT/PDF -> 提取文本 -> AI 分类 -> AI 总结
 
 ```
 reviewSystem/
-├── main.py                  # CLI 入口
+├── main.py                  # CLI 入口 (交互式菜单 + 批量模式)
 ├── convert_md_to_pdf.py     # MD -> PDF 导出工具
 ├── requirements.txt         # Python 依赖
 ├── .env.example             # 环境变量模板
@@ -243,6 +288,25 @@ reviewSystem/
     ├── generator/           # 总结器、实验解答器、Markdown 写入器
     └── pipeline.py          # 核心编排器
 ```
+
+---
+
+## v2.0 更新内容
+
+相对于 v1.x 的改进：
+
+1. 移除前端页面，改为纯命令行交互
+2. Markdown 文件统一放在课程级别的 `md/` 子文件夹
+3. 新增交互式 CLI 菜单 (5 个选项)
+4. 选项 [1] 自动打开输入/输出文件夹
+5. 选项 [1] 支持按序号选择要处理的文件
+6. 选项 [1] Ctrl+C 中断时自动保存部分结果
+7. 选项 [2] 按 `o` 键打开输出文件夹
+8. 选项 [4] 模型名、路径等输入项增加格式校验
+9. 选项 [4] 启动时自动对比 `.env.example` 检测缺失配置
+10. 批量模式新增 `--version` 和 `--log-file` 参数
+11. PDF 导出前自动检测系统中文字体并给出提示
+12. 完善跨平台支持 (Windows / macOS / Linux)
 
 ---
 
