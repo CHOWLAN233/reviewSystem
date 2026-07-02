@@ -536,9 +536,9 @@ def menu_upload(settings: Settings) -> None:
     print()
 
     # File selection loop (allows re-selection on "no")
+    looping = False
     while True:
-        # Clear previous selection display
-        if 'selected_files' in dir():
+        if looping:
             clear_screen()
             print_header("Upload & Process Files")
             print(f"\n  [INFO] Found {len(files)} supported file(s):")
@@ -579,10 +579,12 @@ def menu_upload(settings: Settings) -> None:
                         print(f"  [WARN] Invalid index {idx}, skipping.")
             except ValueError:
                 print("  [ERROR] Invalid input. Please try again.")
+                looping = True
                 continue
 
         if not selected_files:
             print("  [INFO] No files selected.")
+            looping = True
             continue
 
         print(f"\n  [INFO] Will process {len(selected_files)} file(s):")
@@ -598,7 +600,7 @@ def menu_upload(settings: Settings) -> None:
         choice = input("  Start processing? (y/n): ").strip().lower()
         if choice in ("y", "yes"):
             break  # Exit loop, proceed to processing
-        # Otherwise loop back to file selection
+        looping = True  # Loop back to file selection
 
     # Build pipeline and run
     pipeline = Pipeline(settings)
@@ -1340,14 +1342,13 @@ def _first_time_setup() -> Settings | None:
 
 def menu_regenerate(settings: Settings) -> None:
     """
-    Option 6: Regenerate files.
+    Option 5: Regenerate files.
 
     1. Confirmation prompt before proceeding.
-    2. Opens the input folder so user can verify the file is ready.
-    3. Lists all files currently in the input folder.
-    4. User selects which file(s) to regenerate by index.
-    5. Clears the state record for selected files (forces reprocessing).
-    6. Runs the pipeline. Results overwrite the existing output folder.
+    2. Scans root-level files in the input directory (no subfolders).
+    3. User selects which file(s) to regenerate by index.
+    4. Clears state records for selected files (forces reprocessing).
+    5. Runs the pipeline. Results overwrite existing output folders.
     """
     clear_screen()
     print_header("Regenerate Files")
@@ -1363,23 +1364,28 @@ def menu_regenerate(settings: Settings) -> None:
         press_enter()
         return
 
-    # Step 2: Open input folder
+    # Step 2: Scan root-level files only (no folder popup needed)
     input_dir = settings.input_dir
     input_dir.mkdir(parents=True, exist_ok=True)
-    open_and_track(input_dir.resolve())
 
-    print(f"\n  Input folder opened: {input_dir.resolve()}")
-    print("  Verify the file(s) you want to regenerate are in place,")
-    print("  then press Enter to continue.")
-    print()
-    input("  Press Enter to scan for files...")
-
-    # Step 3: Scan and list
-    scanner = FileScanner(input_dir, settings.supported_extensions)
-    files = scanner.scan()
+    # Only scan root-level files (not subdirectories)
+    files: list[Path] = []
+    for ext in settings.supported_extensions:
+        files.extend(input_dir.glob(f"*{ext}"))
+        files.extend(input_dir.glob(f"*{ext.upper()}"))
+    # Deduplicate and sort
+    seen: set[str] = set()
+    unique_files: list[Path] = []
+    for f in sorted(files, key=lambda p: p.name.lower()):
+        resolved = str(f.resolve())
+        if resolved not in seen:
+            seen.add(resolved)
+            unique_files.append(f)
+    files = unique_files
 
     if not files:
-        print("  [INFO] No supported files found in the input directory.")
+        print(f"\n  [INFO] No supported files found in the root of input directory.")
+        print(f"  Directory: {input_dir.resolve()}")
         press_enter()
         return
 
@@ -1387,35 +1393,27 @@ def menu_regenerate(settings: Settings) -> None:
     state_mgr = StateManager(settings.state_file)
     state = state_mgr.load_state()
 
-    print(f"\n  Found {len(files)} file(s):")
+    print(f"\n  Found {len(files)} file(s) in root directory:")
     for i, fp in enumerate(files, 1):
-        try:
-            rel = fp.relative_to(input_dir)
-        except ValueError:
-            rel = fp
         record = state.get(fp.name)
         if record:
             tag = f" [last: {record.last_processed[:16]}, status: {record.status}]"
         else:
             tag = " [never processed]"
-        print(f"    [{i}] {rel}{tag}")
+        print(f"    [{i}] {fp.name}{tag}")
     print()
 
-    # Steps 4-5: Select files + confirm (loop on "no")
+    # Steps 3-4: Select files + confirm (loop on "no")
+    looping = False
     while True:
-        # Re-display files on loop
-        if 'selected_files' in dir():
+        if looping:
             clear_screen()
             print_header("Regenerate Files")
-            print(f"\n  Found {len(files)} file(s):")
+            print(f"\n  Found {len(files)} file(s) in root directory:")
             for i, fp in enumerate(files, 1):
-                try:
-                    rel = fp.relative_to(input_dir)
-                except ValueError:
-                    rel = fp
                 record = state.get(fp.name)
                 tag = f" [last: {record.last_processed[:16]}, status: {record.status}]" if record else " [never processed]"
-                print(f"    [{i}] {rel}{tag}")
+                print(f"    [{i}] {fp.name}{tag}")
             print()
 
         print("  Which file(s) do you want to regenerate?")
@@ -1443,35 +1441,33 @@ def menu_regenerate(settings: Settings) -> None:
                         print(f"  [WARN] Invalid index {idx}, skipping.")
             except ValueError:
                 print("  [ERROR] Invalid input. Please try again.")
+                looping = True
                 continue
 
         if not selected_files:
             print("  [INFO] No files selected.")
+            looping = True
             continue
 
         print(f"\n  Will regenerate {len(selected_files)} file(s):")
         for fp in selected_files:
-            try:
-                rel = fp.relative_to(input_dir)
-            except ValueError:
-                rel = fp
-            print(f"    - {rel}")
+            print(f"    - {fp.name}")
         print()
 
-        # Step 5 confirmation
+        # Confirmation
         choice = input("  Start regeneration? This will overwrite existing output. (y/n): ").strip().lower()
         if choice in ("y", "yes"):
             break  # Exit loop, proceed to processing
-        # Otherwise loop back to file selection
+        looping = True  # Loop back to file selection
 
-    # Step 6: Clear state for selected files so they get reprocessed
+    # Step 4: Clear state for selected files so they get reprocessed
     for fp in selected_files:
         if fp.name in state:
             logger.info(f"Clearing state for: {fp.name}")
             del state[fp.name]
     state_mgr.save_state(state)
 
-    # Step 7: Run the pipeline (same as upload, but we already cleared state)
+    # Step 5: Run the pipeline (same as upload, but we already cleared state)
     pipeline = Pipeline(settings)
 
     def cli_progress(message: str, fraction: float) -> None:
