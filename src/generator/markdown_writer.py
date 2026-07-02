@@ -49,8 +49,13 @@ class MarkdownWriter:
         Create (if needed) and return the output directory for this lecture.
 
         Naming priority:
-        1. If week > 0: ``Week_{week:02d}_{topic_slug}/`` under the course folder
-        2. If week == 0: use sanitized original PPT filename as folder name
+        1. If week > 0 AND a folder for this (course, week) already exists,
+           reuse the existing folder name (even if topic differs).
+        2. If week > 0 and no existing folder: ``Week_{week:02d}_{topic_slug}/``
+        3. If week == 0: use sanitized original PPT filename as folder name
+
+        This prevents duplicate folders when two files (e.g. PPT + PDF)
+        of the same lecture are classified with slightly different topics.
 
         Parameters
         ----------
@@ -64,10 +69,25 @@ class MarkdownWriter:
             The created (or existing) output directory for PDFs and source copies.
         """
         course = self._sanitize(classification.course_name)
+        course_dir = self.output_dir / course
 
         if classification.week_number > 0:
+            week_prefix = f"Week_{classification.week_number:02d}_"
+
+            # Check if a folder for this (course, week) already exists.
+            # If so, reuse it to avoid duplicates when two files of the
+            # same lecture (e.g. PPT + PDF) are classified with slightly
+            # different topic names.
+            existing = self._find_existing_week_folder(course_dir, week_prefix)
+            if existing is not None:
+                logger.info(
+                    f"Reusing existing folder for week {classification.week_number}: "
+                    f"{existing.name} (classified topic: {classification.topic})"
+                )
+                return existing
+
             topic_slug = self._sanitize(classification.topic)
-            folder_name = f"Week_{classification.week_number:02d}_{topic_slug}"
+            folder_name = week_prefix + topic_slug
         else:
             if source_filename:
                 stem = Path(source_filename).stem
@@ -76,7 +96,7 @@ class MarkdownWriter:
                 topic_slug = self._sanitize(classification.topic)
                 folder_name = f"Unknown_{topic_slug}"
 
-        dir_path = self.output_dir / course / folder_name
+        dir_path = course_dir / folder_name
         dir_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {dir_path}")
         return dir_path
@@ -282,6 +302,20 @@ class MarkdownWriter:
     # ------------------------------------------------------------------
     # Utilities
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_existing_week_folder(course_dir: Path, week_prefix: str) -> Path | None:
+        """
+        Scan *course_dir* for a folder whose name starts with *week_prefix*.
+
+        Returns the first match, or None if no such folder exists.
+        """
+        if not course_dir.exists():
+            return None
+        for entry in sorted(course_dir.iterdir()):
+            if entry.is_dir() and entry.name.startswith(week_prefix):
+                return entry
+        return None
 
     def _sanitize(self, name: str) -> str:
         """

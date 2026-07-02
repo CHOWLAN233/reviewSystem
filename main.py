@@ -1007,6 +1007,228 @@ def legacy_main() -> None:
 
 
 # ======================================================================
+# Startup validation & first-time setup
+# ======================================================================
+
+def _test_api_connection(settings: Settings) -> tuple[bool, str]:
+    """
+    Test whether the configured API key and model can connect successfully.
+
+    Makes a minimal completion request (1 token) to verify the API key
+    and network connectivity.
+
+    Returns
+    -------
+    tuple[bool, str]
+        (success, message) -- message is a user-friendly status/error string.
+    """
+    model = settings.classifier_model
+    api_key = settings.classifier_api_key
+
+    if not api_key:
+        return False, "No API key configured."
+
+    try:
+        from litellm import completion
+
+        response = completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            max_tokens=1,
+            api_key=api_key,
+            timeout=15,
+        )
+        _ = response.choices[0].message.content
+        return True, f"Connected successfully to {model}"
+    except ImportError:
+        return False, "litellm package not installed. Run: pip install litellm"
+    except Exception as exc:
+        err_msg = str(exc).strip()
+        # Extract the most useful part of the error
+        if len(err_msg) > 200:
+            err_msg = err_msg[:200] + "..."
+        return False, f"Connection failed: {err_msg}"
+
+
+def _first_time_setup() -> Settings | None:
+    """
+    Guided first-time setup: configure API key, choose preset, test connection.
+
+    Returns
+    -------
+    Settings | None
+        Validated Settings object, or None if the user wants to exit.
+    """
+    clear_screen()
+    print()
+    print("=" * 60)
+    print(f"  Welcome to Review Agent v{VERSION}")
+    print("  AI-Powered Lecture Note Generator")
+    print("=" * 60)
+    print()
+    print("  It looks like this is your first time running Review Agent,")
+    print("  or your API key is not yet configured.")
+    print()
+    print("  Let's set things up. You will need:")
+    print("    - An API key from an LLM provider (e.g. DeepSeek, OpenAI, etc.)")
+    print("    - (Optional) A preferred model preset")
+    print()
+    print("  Supported providers via LiteLLM:")
+    print("    OpenAI | Anthropic | Google (Gemini) | DeepSeek | Ollama | ...")
+    print()
+
+    # Step 1: API Key
+    while True:
+        print("-" * 60)
+        api_key = input("  Step 1: Enter your API key: ").strip()
+        if not api_key:
+            print("  [ERROR] API key cannot be empty.")
+            again = input("  Try again? (y/n): ").strip().lower()
+            if again not in ("y", "yes"):
+                return None
+            continue
+        if len(api_key) < 8:
+            print("  [WARN] API key seems too short (< 8 characters).")
+            confirm = input("  Use this key anyway? (y/n): ").strip().lower()
+            if confirm not in ("y", "yes"):
+                continue
+        break
+
+    os.environ["API_KEY"] = api_key
+    _update_env_file("API_KEY", api_key)
+
+    # Step 2: Choose preset
+    print()
+    print("-" * 60)
+    print("  Step 2: Choose a model preset (or press Enter for 'balanced'):")
+    print()
+    for name, models in MODEL_PRESETS.items():
+        print(f"    {name:<12} classifier={models['classifier']}")
+        print(f"              summarizer={models['summarizer']}")
+        print(f"              lab_solver={models['lab_solver']}")
+        print()
+    preset = input("  Preset [budget/balanced/maximum, default: balanced]: ").strip().lower()
+    if preset not in MODEL_PRESETS:
+        preset = "balanced"
+    os.environ["PRESET"] = preset
+    _update_env_file("PRESET", preset)
+    print(f"  [OK] Using '{preset}' preset.")
+
+    # Step 3: Test connection
+    print()
+    print("-" * 60)
+    print("  Step 3: Testing connection...")
+    try:
+        settings = Settings.from_env()
+    except ValueError as exc:
+        print(f"  [ERROR] Configuration error: {exc}")
+        press_enter()
+        return None
+
+    success, message = _test_api_connection(settings)
+    if success:
+        print(f"  [OK] {message}")
+        print()
+        print("=" * 60)
+        print("  Setup complete! You're ready to go.")
+        print("=" * 60)
+        press_enter()
+        return settings
+    else:
+        print(f"  [FAIL] {message}")
+        print()
+        print("  Troubleshooting tips:")
+        print("    1. Check that your API key is correct and not expired")
+        print("    2. Check your internet connection")
+        print("    3. If using a custom API base, edit .env directly")
+        print("    4. Try a different model (you can change it in Settings later)")
+        print()
+        print("  You can continue without a working connection, but processing")
+        print("  will fail until the API key issue is resolved.")
+        choice = input("  Continue anyway? (y/n): ").strip().lower()
+        if choice in ("y", "yes"):
+            print("  [INFO] Continuing with unverified API key. You can reconfigure in [4] Settings.")
+            press_enter()
+            return settings
+        return None
+
+
+def _startup_check() -> Settings | None:
+    """
+    Run on every interactive launch: verify API key is configured and working.
+
+    Returns
+    -------
+    Settings | None
+        Validated Settings, or None to exit.
+    """
+    setup_logging("WARNING")  # Suppress noisy logs during startup
+
+    # Try loading settings
+    try:
+        settings = Settings.from_env()
+    except ValueError:
+        # No API key configured -- run first-time setup
+        return _first_time_setup()
+
+    # API key is configured, but is it valid?
+    success, message = _test_api_connection(settings)
+
+    # Restore normal logging
+    setup_logging(settings.log_level if settings else "INFO")
+
+    if success:
+        logger.info(f"API connection verified: {message}")
+        return settings
+
+    # Connection failed
+    clear_screen()
+    print()
+    print("=" * 60)
+    print(f"  Review Agent v{VERSION} -- Startup Check")
+    print("=" * 60)
+    print()
+    print(f"  [WARN] Could not connect to the API with the current settings.")
+    print(f"  Model: {settings.classifier_model}")
+    print(f"  Error: {message}")
+    print()
+    print("  What would you like to do?")
+    print("    [1] Go to Settings to fix configuration")
+    print("    [2] Continue anyway (processing will likely fail)")
+    print("    [3] Exit")
+    print()
+    choice = input("  Select an option [1-3]: ").strip()
+
+    if choice == "1":
+        new_settings = menu_settings(settings)
+        if new_settings is None:
+            new_settings = _settings_or_default()
+        # Re-test after settings change
+        if new_settings and new_settings.classifier_api_key:
+            success2, msg2 = _test_api_connection(new_settings)
+            if success2:
+                print(f"\n  [OK] {msg2}")
+                press_enter()
+                return new_settings
+            else:
+                print(f"\n  [FAIL] Still unable to connect: {msg2}")
+                print("  You can continue and try again from [4] Settings.")
+                press_enter()
+                return new_settings
+        return new_settings
+    elif choice == "2":
+        print("  [INFO] Continuing with unverified connection.")
+        press_enter()
+        return settings
+    elif choice == "3":
+        return None
+    else:
+        print("  [INFO] Continuing with unverified connection.")
+        press_enter()
+        return settings
+
+
+# ======================================================================
 # Interactive Menu (main mode)
 # ======================================================================
 
@@ -1017,8 +1239,11 @@ def interactive_main() -> None:
     # Check .env version
     _check_env_version()
 
-    # Load settings
-    settings = _settings_or_default()
+    # ---- Startup validation: check API key before entering main menu ----
+    settings = _startup_check()
+    if settings is None:
+        print("\n  Goodbye!")
+        sys.exit(0)
 
     while True:
         clear_screen()

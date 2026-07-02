@@ -5,7 +5,8 @@ Convert all generated Markdown files to PDF.
 Reads .md files from the course-level ``md/`` subfolder and writes
 PDF output into the corresponding week folder alongside the source PPT.
 
-Output structure:
+Output structure::
+
     02_Output_Notes/
     └── {Course_Name}/
         ├── md/                                    <-- source .md files (course level)
@@ -17,12 +18,18 @@ Output structure:
         │   └── original_file.ppt
         └── Week_02_Another_Topic/
             └── ...
+
+Requires: playwright + chromium
+    pip install playwright && python -m playwright install chromium
 """
+
+from __future__ import annotations
 
 import logging
 import re
 import sys
 from pathlib import Path
+from typing import Optional, Tuple
 
 import markdown
 from playwright.sync_api import sync_playwright
@@ -166,14 +173,18 @@ def md_to_html(md_path: Path) -> str:
     md_text = md_path.read_text(encoding="utf-8")
 
     # Convert Markdown to HTML body
-    md_extensions = [
-        "fenced_code",
-        "tables",
-        "codehilite",
-        "toc",
-        "nl2br",
-        "sane_lists",
-    ]
+    # Note: 'codehilite' requires Pygments. Fall back gracefully if not installed.
+    md_extensions: list[str] = ["fenced_code", "tables", "nl2br", "sane_lists"]
+    try:
+        import pygments  # noqa: F401
+        md_extensions.insert(0, "codehilite")
+    except ImportError:
+        pass
+    try:
+        md_extensions.insert(0, "toc")
+    except Exception:
+        pass
+
     body_html = markdown.markdown(md_text, extensions=md_extensions)
 
     # Wrap in a full HTML document with CSS
@@ -202,14 +213,14 @@ def find_week_dir(course_dir: Path, week_name: str) -> Path:
     return week_dir
 
 
-def parse_md_filename(md_filename: str) -> tuple[str | None, str | None]:
+def parse_md_filename(md_filename: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Parse an md filename like ``Week_01_Introduction_summary.md``
     into ``(week_name, file_type)``.
 
     Returns
     -------
-    tuple[str | None, str | None]
+    Tuple[Optional[str], Optional[str]]
         (week_folder_name, file_type)  e.g. ("Week_01_Introduction", "summary")
         or (None, None) if the filename does not match the pattern.
     """
@@ -235,7 +246,7 @@ def convert_all(output_dir: Path) -> None:
         logger.warning(f"No course-level md/ folders found in {output_dir}")
         return
 
-    md_files: list[tuple[Path, str, str]] = []  # (md_path, course_name, week_name, type)
+    md_files: list = []  # list of (md_path, course_name, week_name, file_type)
     for md_dir in md_dirs:
         course_name = md_dir.parent.name
         for f in sorted(md_dir.glob("*.md")):
