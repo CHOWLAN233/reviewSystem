@@ -1345,7 +1345,7 @@ def menu_regenerate(settings: Settings) -> None:
     Option 5: Regenerate files.
 
     1. Confirmation prompt before proceeding.
-    2. Scans root-level files in the input directory (no subfolders).
+    2. Scans files recursively (only filename displayed, not full path).
     3. User selects which file(s) to regenerate by index.
     4. Clears state records for selected files (forces reprocessing).
     5. Runs the pipeline. Results overwrite existing output folders.
@@ -1364,24 +1364,11 @@ def menu_regenerate(settings: Settings) -> None:
         press_enter()
         return
 
-    # Step 2: Scan root-level files only (no folder popup needed)
+    # Step 2: Scan files recursively (same as upload, but no folder popup)
     input_dir = settings.input_dir
     input_dir.mkdir(parents=True, exist_ok=True)
-
-    # Only scan root-level files (not subdirectories)
-    files: list[Path] = []
-    for ext in settings.supported_extensions:
-        files.extend(input_dir.glob(f"*{ext}"))
-        files.extend(input_dir.glob(f"*{ext.upper()}"))
-    # Deduplicate and sort
-    seen: set[str] = set()
-    unique_files: list[Path] = []
-    for f in sorted(files, key=lambda p: p.name.lower()):
-        resolved = str(f.resolve())
-        if resolved not in seen:
-            seen.add(resolved)
-            unique_files.append(f)
-    files = unique_files
+    scanner = FileScanner(input_dir, settings.supported_extensions)
+    files = scanner.scan()
 
     if not files:
         print(f"\n  [INFO] No supported files found in the root of input directory.")
@@ -1393,26 +1380,26 @@ def menu_regenerate(settings: Settings) -> None:
     state_mgr = StateManager(settings.state_file)
     state = state_mgr.load_state()
 
-    print(f"\n  Found {len(files)} file(s) in root directory:")
+    print(f"\n  Found {len(files)} file(s):")
     for i, fp in enumerate(files, 1):
         record = state.get(fp.name)
         if record:
-            tag = f" [last: {record.last_processed[:16]}, status: {record.status}]"
+            tag = f" [last: {record.last_processed[:16]}]"
         else:
-            tag = " [never processed]"
+            tag = " [new]"
         print(f"    [{i}] {fp.name}{tag}")
     print()
 
-    # Steps 3-4: Select files + confirm (loop on "no")
+    # Step 3: Select files + confirm (loop on "no")
     looping = False
     while True:
         if looping:
             clear_screen()
             print_header("Regenerate Files")
-            print(f"\n  Found {len(files)} file(s) in root directory:")
+            print(f"\n  Found {len(files)} file(s):")
             for i, fp in enumerate(files, 1):
                 record = state.get(fp.name)
-                tag = f" [last: {record.last_processed[:16]}, status: {record.status}]" if record else " [never processed]"
+                tag = f" [last: {record.last_processed[:16]}]" if record else " [new]"
                 print(f"    [{i}] {fp.name}{tag}")
             print()
 
