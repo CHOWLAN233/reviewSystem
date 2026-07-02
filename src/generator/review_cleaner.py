@@ -81,6 +81,41 @@ _MOJIBASE_ISO_RE = re.compile(
 # LaTeX fragments that are clearly garbled
 _GARBLED_LATEX_RE = re.compile(r"\${1,2}[^$]{0,2}\${1,2}")  # empty/malformed $...$
 
+# ANSI escape sequences (often from terminal output artifacts)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# Unicode private use area (PUA) characters – often PPT-specific symbols
+_PUA_CHARS_RE = re.compile(r"[-0-￿Dက00-ჿFD]+")
+
+# Isolated Unicode symbols/dingbats that are likely extraction artifacts
+_SYMBOL_GARBAGE_RE = re.compile(r"[■-◿☀-⛿✀-➿⌀-⏿]{3,}")
+
+# Lines that are ONLY punctuation, symbols, or whitespace (no letters/numbers/CJK)
+_PUNCT_ONLY_LINE_RE = re.compile(
+    r"^\s*[\s\.\,\;\:\!\?\-\+\=\*\/\\\|\(\)\[\]\{\}<>@#\$%\^&\*_~`'\""
+    r" -⁯　、。，．：；！？"
+    r"‘’“”–—… "
+    r"]+\s*$"
+)
+
+# Garbled character sequences: random mixes of Latin/numbers/symbols with no pattern
+# (common in binary extraction where UTF-8 is misaligned)
+_RANDOM_CHAR_RUN_RE = re.compile(r"[^\s]{20,}")  # 20+ chars without space (likely garbled)
+
+# Null bytes and BOM artifacts
+_NULL_BOM_RE = re.compile(r"[\x00\xEF\xBB\xBF\xFE\xFF]")
+
+# PPT table cell artifacts: lines like "| |   |   |" or "|:---|:---|"
+_EMPTY_TABLE_ROW_RE = re.compile(r"^\|[\s\|\-\:]*\|[\s\|\-\:]*$", re.MULTILINE)
+
+# Common PPT text artifacts: "Click to edit", "Enter title", etc.
+_PPT_EDITOR_UI_RE = re.compile(
+    r"(?i)(click\s+to\s+(add|edit)\s+\w+|"
+    r"enter\s+(your\s+)?(title|text|subtitle|notes)|"
+    r"placeholder\s+\w+|"
+    r"\[Type\s+\w+\s+here\])"
+)
+
 
 class ReviewCleaner:
     """
@@ -215,13 +250,77 @@ class ReviewCleaner:
         long_blocks = _LONG_CODE_BLOCK_RE.findall(content)
         if long_blocks:
             for i, block in enumerate(long_blocks):
-                # Wrap in a review comment to flag for manual check
                 placeholder = (
                     f"\n> [Review note: Long code block ({len(block):,} chars) "
                     f"may contain extraction artifacts. Verify correctness.]\n\n"
                 )
                 content = content.replace(block, placeholder, 1)
             issues.append(f"Flagged {len(long_blocks)} suspicious long code block(s)")
+
+        # 11. Strip ANSI escape sequences
+        ansi_count = len(_ANSI_ESCAPE_RE.findall(content))
+        if ansi_count > 0:
+            content = _ANSI_ESCAPE_RE.sub("", content)
+            issues.append(f"Removed {ansi_count} ANSI escape sequence(s)")
+
+        # 12. Strip Unicode private use area characters
+        pua_count = len(_PUA_CHARS_RE.findall(content))
+        if pua_count > 0:
+            content = _PUA_CHARS_RE.sub("", content)
+            issues.append(f"Removed {pua_count} private-use character(s)")
+
+        # 13. Strip isolated symbol runs (dingbats from PPT)
+        symbol_runs = _SYMBOL_GARBAGE_RE.findall(content)
+        if symbol_runs:
+            content = _SYMBOL_GARBAGE_RE.sub("", content)
+            issues.append(f"Removed {len(symbol_runs)} symbol-garbage run(s)")
+
+        # 14. Remove punctuation-only lines
+        lines = content.split("\n")
+        punct_count = 0
+        cleaned = []
+        for line in lines:
+            if _PUNCT_ONLY_LINE_RE.match(line):
+                punct_count += 1
+                continue
+            cleaned.append(line)
+        if punct_count > 0:
+            content = "\n".join(cleaned)
+            issues.append(f"Removed {punct_count} punctuation-only line(s)")
+
+        # 15. Flag suspiciously long unbroken strings (possible binary artifact)
+        long_runs = _RANDOM_CHAR_RUN_RE.findall(content)
+        if long_runs:
+            filtered_runs = [r for r in long_runs if not any(
+                c.isalpha() and c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                for c in r[:5]
+            )]
+            for run in filtered_runs[:10]:  # Limit replacements
+                content = content.replace(run, "", 1)
+            if filtered_runs:
+                issues.append(f"Removed {len(filtered_runs)} garbled char run(s)")
+
+        # 16. Strip null bytes and BOM
+        null_count = len(_NULL_BOM_RE.findall(content))
+        if null_count > 0:
+            content = _NULL_BOM_RE.sub("", content)
+            issues.append(f"Removed {null_count} null/BOM byte(s)")
+
+        # 17. Remove empty table rows
+        empty_rows = len(_EMPTY_TABLE_ROW_RE.findall(content))
+        if empty_rows > 0:
+            content = _EMPTY_TABLE_ROW_RE.sub("", content)
+            issues.append(f"Removed {empty_rows} empty table row(s)")
+
+        # 18. Remove PPT editor UI artifacts
+        ui_artifacts = _PPT_EDITOR_UI_RE.findall(content)
+        if ui_artifacts:
+            for artifact in set(ui_artifacts):
+                content = content.replace(artifact, "")
+            issues.append(f"Removed {len(ui_artifacts)} PPT editor UI artifact(s)")
+
+        # Final pass: remove doubled blank lines from all the removals
+        content = _MULTI_BLANK_RE.sub("\n\n\n", content)
 
         return content, issues
 

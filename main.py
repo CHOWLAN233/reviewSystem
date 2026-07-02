@@ -98,6 +98,72 @@ def open_folder(path: Path) -> None:
         print(f"  [WARN] Could not open folder: {e}")
 
 
+def close_folder(path: Path) -> None:
+    """
+    Close any Explorer/Finder windows showing *path*.
+
+    On Windows, uses COM to enumerate and close matching Explorer windows.
+    On other platforms this is a no-op (Finder windows are not closable via CLI).
+    """
+    if os.name != "nt":
+        return
+    try:
+        target = str(path.resolve()).replace("\\", "/").lower()
+        import pythoncom
+        pythoncom.CoInitialize()
+        from win32com.client import Dispatch
+        shell = Dispatch("Shell.Application")
+        for window in shell.Windows():
+            try:
+                location = str(window.LocationURL).lower()
+                # LocationURL looks like: file:///C:/path/to/folder
+                if target in location or location.endswith(target):
+                    window.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+    except ImportError:
+        # Fallback: try PowerShell (no extra deps needed)
+        try:
+            folder_name = path.name.lower()
+            ps_cmd = (
+                f'$shell = New-Object -ComObject Shell.Application; '
+                f'$shell.Windows() | Where-Object {{ '
+                f'$_.LocationURL -like "*{folder_name}*" '
+                f'}} | ForEach-Object {{ $_.Quit() }}'
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass  # Best effort only
+    except Exception:
+        pass  # Best effort only
+
+
+# Track opened folders so we can close them later
+_opened_folder: Path | None = None
+
+
+def open_and_track(path: Path) -> None:
+    """Open a folder and remember it for later closing."""
+    global _opened_folder
+    # Close previously opened folder first
+    if _opened_folder is not None:
+        close_folder(_opened_folder)
+    open_folder(path)
+    _opened_folder = path
+
+
+def close_tracked_folder() -> None:
+    """Close the last tracked folder, if any."""
+    global _opened_folder
+    if _opened_folder is not None:
+        close_folder(_opened_folder)
+        _opened_folder = None
+
+
 # ======================================================================
 # Validation helpers
 # ======================================================================
@@ -307,6 +373,88 @@ def _warn_missing_cjk_fonts() -> None:
 
 
 # ======================================================================
+# Processing log capture (silent progress + error log export)
+# ======================================================================
+
+class _ProcessingLogCapture:
+    """
+    Context manager that suppresses console logs during processing,
+    captures them to a temp file, and on error exports the log.
+
+    Usage::
+
+        with _ProcessingLogCapture() as cap:
+            # ... run pipeline ...
+            cap.mark_success()  # on success, delete temp log
+        # on error or exception, log file is kept and path is printed
+    """
+
+    def __init__(self) -> None:
+        self._temp_path: Path | None = None
+        self._handler: logging.FileHandler | None = None
+        self._old_levels: dict[str, int] = {}
+        self._success = False
+
+    def __enter__(self) -> "_ProcessingLogCapture":
+        import tempfile
+        # Create temp log file
+        fd, tmp = tempfile.mkstemp(suffix=".log", prefix="review_agent_")
+        os.close(fd)
+        self._temp_path = Path(tmp)
+
+        # Add file handler for full capture
+        self._handler = logging.FileHandler(self._temp_path, encoding="utf-8")
+        self._handler.setLevel(logging.DEBUG)
+        self._handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)-7s] %(name)s - %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        root = logging.getLogger()
+        root.addHandler(self._handler)
+
+        # Suppress console: raise all logger levels to WARNING
+        for name in ("main", "src", "prompts", ""):
+            lg = logging.getLogger(name) if name else root
+            self._old_levels[name] = lg.level
+            lg.setLevel(logging.WARNING)
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        root = logging.getLogger()
+        if self._handler:
+            self._handler.flush()
+            root.removeHandler(self._handler)
+            self._handler.close()
+
+        # Restore old levels
+        for name, level in self._old_levels.items():
+            lg = logging.getLogger(name) if name else root
+            lg.setLevel(level)
+
+        if not self._success and self._temp_path and self._temp_path.exists():
+            # Error occurred - export to permanent location
+            dest = _PROJECT_ROOT / f"error_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+            try:
+                import shutil
+                shutil.move(str(self._temp_path), str(dest))
+                print(f"\n  [ERROR LOG] Full error details exported to:")
+                print(f"    {dest.resolve()}")
+            except Exception:
+                if self._temp_path.exists():
+                    print(f"\n  [ERROR LOG] See: {self._temp_path.resolve()}")
+        elif self._temp_path and self._temp_path.exists():
+            # Success - clean up
+            self._temp_path.unlink(missing_ok=True)
+
+        return False  # Don't suppress exceptions
+
+    def mark_success(self) -> None:
+        """Call after pipeline completes without errors."""
+        self._success = True
+
+
+# ======================================================================
 # Interactive Menu Handlers
 # ======================================================================
 
@@ -328,7 +476,7 @@ def menu_upload(settings: Settings) -> None:
     input_dir.mkdir(parents=True, exist_ok=True)
 
     # Open the input folder for the user
-    open_folder(input_dir.resolve())
+    open_and_track(input_dir.resolve())
 
     print(f"\n  Input directory: {input_dir}")
     print(f"  Supported formats: .pptx, .ppt, .pdf")
@@ -446,50 +594,52 @@ def menu_upload(settings: Settings) -> None:
         print(f"\r  [{bar}] {pct:3d}%  {message}", end="", flush=True)
 
     print()
-    try:
-        # Force only the selected files
-        force_names = [fp.name for fp in selected_files]
-        report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
-        print()  # newline after progress bar
-        print_report(report)
-
-        # Offer PDF conversion
-        print()
-        if report.processed > 0:
-            # Check CJK fonts before offering PDF conversion
-            _warn_missing_cjk_fonts()
-
-            pdf_choice = input("\n  Convert generated notes to PDF? (y/n): ").strip().lower()
-            if pdf_choice in ("y", "yes"):
-                print_bar("PDF Conversion")
-                try:
-                    from convert_md_to_pdf import convert_all
-                    convert_all(settings.output_dir)
-                except ImportError as exc:
-                    print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
-                    print("  Install with: pip install playwright && python -m playwright install chromium")
-                except Exception as exc:
-                    print(f"  [ERROR] PDF conversion failed: {exc}")
-
-    except KeyboardInterrupt:
-        print("\n\n  [INFO] Interrupted by user. Partial results have been saved.")
-        # State is already partially saved by pipeline; finalize what we have
+    log_capture = _ProcessingLogCapture()
+    with log_capture:
         try:
-            state = state_mgr.load_state()
-            state_mgr.save_state(state)
-            print("  [INFO] Processing state saved for completed files.")
-        except Exception:
-            pass
-    except Exception as exc:
-        logger.exception(f"Fatal error: {exc}")
-        print(f"\n  [ERROR] Pipeline failed: {exc}")
+            # Force only the selected files
+            force_names = [fp.name for fp in selected_files]
+            report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
+            log_capture.mark_success()
+            print()  # newline after progress bar
+            print_report(report)
+
+            # Offer PDF conversion
+            print()
+            if report.processed > 0:
+                # Check CJK fonts before offering PDF conversion
+                _warn_missing_cjk_fonts()
+
+                pdf_choice = input("\n  Convert generated notes to PDF? (y/n): ").strip().lower()
+                if pdf_choice in ("y", "yes"):
+                    print_bar("PDF Conversion")
+                    try:
+                        from convert_md_to_pdf import convert_all
+                        convert_all(settings.output_dir)
+                    except ImportError as exc:
+                        print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
+                        print("  Install with: pip install playwright && python -m playwright install chromium")
+                    except Exception as exc:
+                        print(f"  [ERROR] PDF conversion failed: {exc}")
+
+        except KeyboardInterrupt:
+            print("\n\n  [INFO] Interrupted by user. Partial results have been saved.")
+            try:
+                state = state_mgr.load_state()
+                state_mgr.save_state(state)
+                print("  [INFO] Processing state saved for completed files.")
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.exception(f"Fatal error: {exc}")
+            print(f"\n  [ERROR] Pipeline failed: {exc}")
 
     # Open output folder for the user
     output_dir = settings.output_dir
     if output_dir.exists():
         print()
         print(f"  Opening output folder: {output_dir.resolve()}")
-        open_folder(output_dir.resolve())
+        open_and_track(output_dir.resolve())
 
     press_enter()
 
@@ -514,7 +664,7 @@ def menu_view_output(settings: Settings) -> None:
         print("  Press 'o' to open parent directory, or Enter to go back.")
         choice = input("  > ").strip().lower()
         if choice == "o":
-            open_folder(output_dir.parent.resolve())
+            open_and_track(output_dir.parent.resolve())
         return
 
     # Find all PDF and MD files
@@ -528,7 +678,7 @@ def menu_view_output(settings: Settings) -> None:
         print("  Press 'o' to open the output folder, or Enter to go back.")
         choice = input("  > ").strip().lower()
         if choice == "o":
-            open_folder(output_dir.resolve())
+            open_and_track(output_dir.resolve())
         return
 
     print(f"\n  Output directory: {output_dir.resolve()}")
@@ -566,7 +716,7 @@ def menu_view_output(settings: Settings) -> None:
     print("  Press 'o' to open the output folder, or Enter to go back.")
     choice = input("  > ").strip().lower()
     if choice == "o":
-        open_folder(output_dir.resolve())
+        open_and_track(output_dir.resolve())
 
 
 def _print_tree(directory: Path, prefix: str, max_depth: int, current_depth: int) -> None:
@@ -1199,7 +1349,7 @@ def menu_regenerate(settings: Settings) -> None:
     # Step 2: Open input folder
     input_dir = settings.input_dir
     input_dir.mkdir(parents=True, exist_ok=True)
-    open_folder(input_dir.resolve())
+    open_and_track(input_dir.resolve())
 
     print(f"\n  Input folder opened: {input_dir.resolve()}")
     print("  Verify the file(s) you want to regenerate are in place,")
@@ -1296,43 +1446,46 @@ def menu_regenerate(settings: Settings) -> None:
         print(f"\r  [{bar}] {pct:3d}%  {message}", end="", flush=True)
 
     print()
-    try:
-        force_names = [fp.name for fp in selected_files]
-        report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
-        print()
-        print_report(report)
-
-        if report.processed > 0:
-            _warn_missing_cjk_fonts()
-            pdf_choice = input("\n  Convert regenerated notes to PDF? (y/n): ").strip().lower()
-            if pdf_choice in ("y", "yes"):
-                print_bar("PDF Conversion")
-                try:
-                    from convert_md_to_pdf import convert_all
-                    convert_all(settings.output_dir)
-                except ImportError as exc:
-                    print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
-                    print("  Install with: pip install playwright && python -m playwright install chromium")
-                except Exception as exc:
-                    print(f"  [ERROR] PDF conversion failed: {exc}")
-
-    except KeyboardInterrupt:
-        print("\n\n  [INFO] Interrupted by user. Partial results saved.")
+    log_capture = _ProcessingLogCapture()
+    with log_capture:
         try:
-            state = state_mgr.load_state()
-            state_mgr.save_state(state)
-        except Exception:
-            pass
-    except Exception as exc:
-        logger.exception(f"Regeneration failed: {exc}")
-        print(f"\n  [ERROR] Regeneration failed: {exc}")
+            force_names = [fp.name for fp in selected_files]
+            report = pipeline.run(progress_callback=cli_progress, force_files=force_names)
+            log_capture.mark_success()
+            print()
+            print_report(report)
+
+            if report.processed > 0:
+                _warn_missing_cjk_fonts()
+                pdf_choice = input("\n  Convert regenerated notes to PDF? (y/n): ").strip().lower()
+                if pdf_choice in ("y", "yes"):
+                    print_bar("PDF Conversion")
+                    try:
+                        from convert_md_to_pdf import convert_all
+                        convert_all(settings.output_dir)
+                    except ImportError as exc:
+                        print(f"  [ERROR] PDF conversion requires additional dependencies: {exc}")
+                        print("  Install with: pip install playwright && python -m playwright install chromium")
+                    except Exception as exc:
+                        print(f"  [ERROR] PDF conversion failed: {exc}")
+
+        except KeyboardInterrupt:
+            print("\n\n  [INFO] Interrupted by user. Partial results saved.")
+            try:
+                state = state_mgr.load_state()
+                state_mgr.save_state(state)
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.exception(f"Regeneration failed: {exc}")
+            print(f"\n  [ERROR] Regeneration failed: {exc}")
 
     # Open output folder
     output_dir = settings.output_dir
     if output_dir.exists():
         print()
         print(f"  Opening output folder: {output_dir.resolve()}")
-        open_folder(output_dir.resolve())
+        open_and_track(output_dir.resolve())
 
     press_enter()
 
