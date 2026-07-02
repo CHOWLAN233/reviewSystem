@@ -11,16 +11,12 @@
 .sync_state.json.tmp
 
 # =============================================================================
-# Input (course materials – large binaries, do not track)
+# Input / Output (user data – do not track)
 # =============================================================================
 01_Input_PPTs/*
 !01_Input_PPTs/.gitkeep
-
-# =============================================================================
-# Output – track generated PDFs and MDs, ignore copied PPT sources
-# =============================================================================
-02_Output_Notes/**/*.ppt
-02_Output_Notes/**/*.pptx
+02_Output_Notes/*
+!02_Output_Notes/.gitkeep
 
 # =============================================================================
 # Python
