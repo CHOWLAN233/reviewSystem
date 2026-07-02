@@ -1375,14 +1375,16 @@ def menu_regenerate(settings: Settings) -> None:
         press_enter()
         return
 
-    # Group files by parent folder name
+    # Group files by top-level folder name (first component of relative path)
     state_mgr = StateManager(settings.state_file)
     state = state_mgr.load_state()
     groups: dict[str, list[Path]] = {}
     for fp in files:
         try:
             rel = fp.relative_to(input_dir)
-            folder = str(rel.parent) if str(rel.parent) != "." else "(root)"
+            # Use only the first path component as the group name
+            parts = rel.parts
+            folder = parts[0] if parts else "(root)"
         except ValueError:
             folder = "(root)"
         groups.setdefault(folder, []).append(fp)
@@ -1467,22 +1469,33 @@ def menu_regenerate(settings: Settings) -> None:
         looping = True
 
     # Step 4: Delete old output folders and clear state
+    import shutil as _shutil
     output_dir = settings.output_dir
     deleted_count = 0
+
     for folder, folder_files in selected_groups:
-        # Find the output course folder from state records
+        # Find the course name from state records of files in this group
+        course_name = None
         for fp in folder_files:
             record = state.get(fp.name)
             if record and record.output_path:
-                # output_path is like "SOF 103/Week_01_..." – get the course folder
-                course_folder = record.output_path.split("/")[0] if "/" in record.output_path else record.output_path
-                target = output_dir / course_folder
-                if target.exists():
-                    import shutil
-                    shutil.rmtree(target, ignore_errors=True)
-                    logger.info(f"Deleted old output: {target}")
-                    deleted_count += 1
-                break  # Only need to find it once per folder group
+                # output_path like "SOF 103/Week_01_..." → course = "SOF 103"
+                course_name = record.output_path.split("/")[0].split("\\")[0]
+                break
+
+        # Fallback: try folder name as course name
+        if not course_name and folder != "(root)":
+            candidate = output_dir / folder
+            if candidate.exists():
+                course_name = folder
+
+        if course_name:
+            target = output_dir / course_name
+            if target.exists():
+                _shutil.rmtree(target, ignore_errors=True)
+                logger.info(f"Deleted old output: {target}")
+                deleted_count += 1
+                print(f"  [INFO] Deleted: {target.name}/")
 
     # Clear state for all selected files
     for fp in selected_files:
