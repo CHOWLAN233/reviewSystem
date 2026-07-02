@@ -71,7 +71,7 @@ class AIClassifier:
         self.llm = llm_client
         self.slide_count = slide_count
 
-    def classify(self, filepath: Path) -> ClassificationResult:
+    def classify(self, filepath: Path, subfolder_hint: str | None = None) -> ClassificationResult:
         """
         Parse the first *slide_count* slides/pages of *filepath* and
         classify via LLM.
@@ -80,6 +80,8 @@ class AIClassifier:
         ----------
         filepath : Path
             Path to the lecture file.
+        subfolder_hint : str | None
+            Optional subfolder name that may contain course name hints.
 
         Returns
         -------
@@ -95,17 +97,21 @@ class AIClassifier:
             text_snippet = parser.extract_pages_text(filepath, 0, pages_to_read)
         except Exception as exc:
             logger.warning(f"Could not parse {filename}: {exc}. Falling back to filename regex.")
-            return self._regex_from_filename(filename)
+            return self._regex_from_filename(filename, subfolder_hint=subfolder_hint)
 
         if not text_snippet.strip():
             logger.warning(f"No text extracted from {filename}. Falling back to filename regex.")
-            return self._regex_from_filename(filename)
+            return self._regex_from_filename(filename, subfolder_hint=subfolder_hint)
+
+        # Prepend subfolder hint to the text snippet if available
+        if subfolder_hint:
+            text_snippet = f"[Subfolder: {subfolder_hint}]\n{text_snippet}"
 
         # 2. Call LLM
         user_prompt = build_classification_user_prompt(filename, text_snippet)
         try:
             raw = self.llm.complete(user_prompt, system_prompt=CLASSIFIER_SYSTEM_PROMPT)
-            result = self._parse_response(raw, filename)
+            result = self._parse_response(raw, filename, subfolder_hint=subfolder_hint)
 
             # If LLM didn't detect a week number, try filename extraction
             if result.week_number == 0:
@@ -132,7 +138,7 @@ class AIClassifier:
     # Internal
     # ------------------------------------------------------------------
 
-    def _parse_response(self, raw: str, filename: str) -> ClassificationResult:
+    def _parse_response(self, raw: str, filename: str, subfolder_hint: str | None = None) -> ClassificationResult:
         """Parse the LLM response into a ``ClassificationResult``."""
         try:
             data = json.loads(raw.strip())
@@ -144,7 +150,7 @@ class AIClassifier:
 
         if not data:
             logger.debug(f"JSON parse failed for {filename}, falling back to regex.")
-            return self._regex_from_filename(filename)
+            return self._regex_from_filename(filename, subfolder_hint=subfolder_hint)
 
         result = ClassificationResult(
             course_name=str(data.get("course_name", "Unknown Course")).strip(),
@@ -216,9 +222,11 @@ class AIClassifier:
         name = Path(filename).stem
 
         patterns = [
+            r"[Cc]hapter\s*(\d+)",
             r"[Ll]ecture\s*(\d+)",
             r"[Ww]eek\s*(\d+)",
-            r"第\s*(\d+)\s*[周讲课]",
+            r"第\s*(\d+)\s*[周讲课章]",
+            r"\b[Cc][Hh](\d+)\b",
             r"\b[Ww](\d+)\b",
             r"\b[Ll](\d+)\b",
         ]
@@ -229,7 +237,7 @@ class AIClassifier:
         return 0
 
     @staticmethod
-    def _regex_from_filename(filename: str) -> ClassificationResult:
+    def _regex_from_filename(filename: str, subfolder_hint: str | None = None) -> ClassificationResult:
         """
         Fallback classification using filename pattern matching.
 
@@ -244,9 +252,11 @@ class AIClassifier:
         # Extract week number
         week = 0
         week_patterns = [
+            (r"[Cc]hapter\s*(\d+)", False),
             (r"[Ww]eek\s*(\d+)", False),
             (r"[Ll]ecture\s*(\d+)", False),
-            (r"第\s*(\d+)\s*[周讲]", False),
+            (r"第\s*(\d+)\s*[周讲章]", False),
+            (r"[Cc][Hh](\d+)", False),
             (r"[Ww](\d+)", False),
             (r"[Ll](\d+)", False),
             (r"(\d+)[-_]?", True),  # generic number – only if nothing else matched
@@ -276,6 +286,11 @@ class AIClassifier:
 
         if not cleaned:
             cleaned = name
+
+        # Prefer subfolder name as course name hint if available
+        if subfolder_hint:
+            hint_cleaned = subfolder_hint.replace("_", " ").replace("-", " ")
+            cleaned = f"{hint_cleaned} - {cleaned}" if cleaned else hint_cleaned
 
         logger.info(f"Regex fallback for {filename!r}: course={cleaned!r}, week={week}, has_lab={has_lab}")
 

@@ -9,7 +9,10 @@ end-to-end workflow.
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -173,39 +176,72 @@ class Pipeline:
             report.elapsed_seconds = time.monotonic() - started
             return report
 
-        # 3. Process each file
+        # 3. Process files in parallel
         total = len(new_or_changed)
-        for idx, filepath in enumerate(new_or_changed):
-            fraction = 0.1 + 0.85 * (idx / total)
-            self._report(
-                progress_callback,
-                f"Processing ({idx + 1}/{total}): {filepath.name}",
-                fraction,
-            )
+        completed_count = 0
+        completed_lock = threading.Lock()
 
-            result = self._process_single_file(filepath)
-            report.details.append(result)
+        # Determine concurrency: env var or default to 4 workers
+        max_workers = int(os.environ.get("MAX_WORKERS", "4"))
 
-            if result.status == "processed":
-                report.processed += 1
-            elif result.status == "error":
-                report.errors += 1
-            else:
-                report.skipped += 1
+        # Build a list of (filepath, subfolder_hint) tuples
+        tasks: list[tuple[Path, str | None]] = []
+        for filepath in new_or_changed:
+            try:
+                subfolder = filepath.relative_to(self.settings.input_dir).parent
+                subfolder_hint = str(subfolder) if str(subfolder) != "." else None
+            except ValueError:
+                subfolder_hint = None
+            tasks.append((filepath, subfolder_hint))
 
-            # Update state record for this file
-            state[filepath.name] = self.state_manager.build_file_record(
-                filepath,
-                status=result.status,
-                output_path=result.output_path or None,
-                error_message=result.error or None,
-            )
-            # Inject classification data if available
-            if result.course:
-                # We don't persist the full classification here since we'd need
-                # to store it after the classify step. Instead the build_file_record
-                # captures the status and output path.
-                pass
+        logger.info(f"Processing {total} file(s) with {max_workers} parallel workers …")
+
+        # Submit all tasks to the thread pool
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {
+                executor.submit(self._process_single_file, fp, hint): (fp, hint)
+                for fp, hint in tasks
+            }
+
+            for future in as_completed(future_to_file):
+                filepath, _hint = future_to_file[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    # This should not happen — _process_single_file catches all
+                    logger.error(f"Unexpected thread error for {filepath.name}: {exc}")
+                    result = ProcessedFile(
+                        filename=filepath.name,
+                        status="error",
+                        error=f"Thread error: {exc}",
+                    )
+
+                report.details.append(result)
+
+                if result.status == "processed":
+                    report.processed += 1
+                elif result.status == "error":
+                    report.errors += 1
+                else:
+                    report.skipped += 1
+
+                # Update state record for this file (dict assignment is atomic in CPython)
+                state[filepath.name] = self.state_manager.build_file_record(
+                    filepath,
+                    status=result.status,
+                    output_path=result.output_path or None,
+                    error_message=result.error or None,
+                )
+
+                # Thread-safe progress update
+                with completed_lock:
+                    completed_count += 1
+                    fraction = 0.1 + 0.85 * (completed_count / total)
+                    self._report(
+                        progress_callback,
+                        f"Processing ({completed_count}/{total}): {result.filename} [{result.status}]",
+                        fraction,
+                    )
 
         # 4. Persist state
         self._report(progress_callback, "Saving state …", 0.96)
@@ -240,7 +276,13 @@ class Pipeline:
 
         for filepath in new_or_changed:
             try:
-                classification = self.classifier.classify(filepath)
+                # Compute subfolder hint for classification context
+                try:
+                    subfolder = filepath.relative_to(self.settings.input_dir).parent
+                    subfolder_hint = str(subfolder) if str(subfolder) != "." else None
+                except ValueError:
+                    subfolder_hint = None
+                classification = self.classifier.classify(filepath, subfolder_hint=subfolder_hint)
                 report.details.append(ProcessedFile(
                     filename=filepath.name,
                     status="processed",
@@ -261,7 +303,7 @@ class Pipeline:
     # Internal
     # ------------------------------------------------------------------
 
-    def _process_single_file(self, filepath: Path) -> ProcessedFile:
+    def _process_single_file(self, filepath: Path, subfolder_hint: str | None = None) -> ProcessedFile:
         """
         Process one file through the full pipeline.
 
@@ -273,13 +315,13 @@ class Pipeline:
         try:
             # a. Classify
             logger.info(f"[{filename}] Classifying …")
-            classification = self.classifier.classify(filepath)
+            classification = self.classifier.classify(filepath, subfolder_hint=subfolder_hint)
             result.course = classification.course_name
             result.week = classification.week_number
             result.topic = classification.topic
 
-            # b. Create output directory
-            output_dir = self.writer.ensure_output_dir(classification)
+            # b. Create output directory (pass filename for week=0 fallback naming)
+            output_dir = self.writer.ensure_output_dir(classification, source_filename=filename)
             result.output_path = self.writer.get_relative_output_path(output_dir)
 
             # c. Parse full text
@@ -290,6 +332,7 @@ class Pipeline:
             if not full_text.strip():
                 logger.warning(f"[{filename}] No text extracted – writing placeholder.")
                 self._write_placeholder(output_dir, filename, classification)
+                self._copy_source_file(filepath, output_dir)
                 result.status = "processed"
                 return result
 
@@ -303,6 +346,9 @@ class Pipeline:
                 logger.info(f"[{filename}] Solving lab …")
                 lab_solution = self.lab_solver.solve(full_text, classification)
                 self.writer.write_lab_solution(output_dir, classification, lab_solution, filename)
+
+            # f. Copy original file into output folder for reference
+            self._copy_source_file(filepath, output_dir)
 
             result.status = "processed"
             logger.info(f"[{filename}] ✓ Done → {result.output_path}")
@@ -338,6 +384,26 @@ class Pipeline:
         )
         filepath = output_dir / "summary.md"
         self.writer._atomic_write(filepath, content)
+
+    @staticmethod
+    def _copy_source_file(source_path: Path, output_dir: Path) -> None:
+        """
+        Copy the original PPT/PDF file into the output directory for reference.
+
+        Skips if the file already exists in the output (same size).
+        """
+        import shutil
+
+        dest = output_dir / source_path.name
+        if dest.exists() and dest.stat().st_size == source_path.stat().st_size:
+            logger.debug(f"Source file already in output: {dest.name}")
+            return
+
+        try:
+            shutil.copy2(source_path, dest)
+            logger.info(f"Copied source file: {source_path.name} → {output_dir}")
+        except OSError as exc:
+            logger.warning(f"Could not copy source file {source_path.name}: {exc}")
 
     @staticmethod
     def _report(

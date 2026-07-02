@@ -99,15 +99,20 @@ class LabSolver:
         )
 
     def _extract_section(self, text: str, header: str) -> str:
-        """Extract content under a markdown header."""
+        """
+        Extract content under a markdown header matching *header* keyword(s).
+
+        Supports bilingual headers like ``## 实验目标 / Lab Objectives``
+        by matching any ``## ...`` line that contains the *header* substring.
+        """
         escaped = re.escape(header)
-        pattern = rf"##\s+{escaped}\s*\n(.*?)(?=\n##\s|\Z)"
+        pattern = rf"##\s+.*?{escaped}.*?\s*\n(.*?)(?=\n##\s+\S|\Z)"
         match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
         if match:
             return match.group(1).strip()
 
         # Looser fallback
-        pattern_loose = rf"{escaped}\s*\n(.*?)(?=\n##\s|\Z)"
+        pattern_loose = rf"{escaped}\s*\n(.*?)(?=\n##\s+\S|\Z)"
         match = re.search(pattern_loose, text, re.DOTALL | re.IGNORECASE)
         if match:
             return match.group(1).strip()

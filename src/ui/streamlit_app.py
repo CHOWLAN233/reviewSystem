@@ -105,7 +105,7 @@ def render_landing_page() -> None:
     st.markdown("---")
 
     # -- Features --
-    st.markdown(f"### ✨ {t('landing_feature1_title').split(chr(10))[0] if False else 'Core Features' if LANG == 'en' else '核心功能'}")
+    st.markdown(f"### ✨ {t('landing_features_heading')}")
 
     cols = st.columns(2)
     features = [
@@ -264,6 +264,8 @@ def render_sidebar() -> Optional[Settings]:
 def render_dashboard(settings: Optional[Settings]) -> None:
     st.header(f"📊 {t('dashboard_header')}")
 
+    # Fall back to persisted settings from session state
+    settings = settings or st.session_state.get("settings")
     if settings is None:
         st.info(f"👈 {t('dashboard_get_started')}")
         return
@@ -327,6 +329,8 @@ def render_dashboard(settings: Optional[Settings]) -> None:
 def render_processing(settings: Optional[Settings]) -> None:
     st.header(f"⚡ {t('processing_header')}")
 
+    # Fall back to persisted settings from session state
+    settings = settings or st.session_state.get("settings")
     if settings is None:
         st.info(f"👈 {t('processing_get_started')}")
         return
@@ -441,6 +445,8 @@ def render_processing(settings: Optional[Settings]) -> None:
 def render_output_browser(settings: Optional[Settings]) -> None:
     st.header(f"📝 {t('output_header')}")
 
+    # Fall back to persisted settings from session state
+    settings = settings or st.session_state.get("settings")
     if settings is None:
         st.info(f"👈 {t('output_get_started')}")
         return
@@ -468,7 +474,7 @@ def render_output_browser(settings: Optional[Settings]) -> None:
         courses.setdefault(course, []).append(f)
 
     for course, files in sorted(courses.items()):
-        label = f"📁 {course}" + (f" ({len(files)} files)" if LANG == "en" else f" ({len(files)} 个文件)")
+        label = f"📁 {course} ({t('output_files_count', count=len(files))})"
         with st.expander(label, expanded=True):
             for f_path in sorted(files):
                 try:

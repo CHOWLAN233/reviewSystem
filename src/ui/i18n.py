@@ -85,6 +85,7 @@ STRINGS = {
         "landing_feature3_desc": "Detects lab/practical sessions and produces solutions with pitfalls and environment checklists.",
         "landing_feature4_title": "Incremental Sync",
         "landing_feature4_desc": "Only processes new or modified files — saves API tokens and time.",
+        "landing_features_heading": "Core Features",
 
         # ---- Sidebar ----
         "sidebar_header": "Configuration",
@@ -174,6 +175,8 @@ STRINGS = {
         "output_close_btn": "Close",
         "output_cannot_read": "Cannot read file",
 
+        "output_files_count": "{count} files",
+
         # ---- Language ----
         "lang_en": "English",
         "lang_zh": "中文",
@@ -203,6 +206,7 @@ STRINGS = {
         "landing_feature3_desc": "自动检测实验/上机内容，生成答案、避坑指南和环境清单。",
         "landing_feature4_title": "增量同步",
         "landing_feature4_desc": "仅处理新增或修改的文件——节省 API 费用和时间。",
+        "landing_features_heading": "核心功能",
 
         # ---- Sidebar ----
         "sidebar_header": "系统配置",
@@ -291,6 +295,7 @@ STRINGS = {
         "output_view_btn": "查看",
         "output_close_btn": "关闭",
         "output_cannot_read": "无法读取文件",
+        "output_files_count": "{count} 个文件",
 
         # ---- Language ----
         "lang_en": "English",

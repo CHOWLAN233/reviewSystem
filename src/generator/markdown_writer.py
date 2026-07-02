@@ -36,15 +36,21 @@ class MarkdownWriter:
     # Public API
     # ------------------------------------------------------------------
 
-    def ensure_output_dir(self, classification: ClassificationResult) -> Path:
+    def ensure_output_dir(
+        self, classification: ClassificationResult, source_filename: str = ""
+    ) -> Path:
         """
-        Create (if needed) and return the output directory for this lecture::
+        Create (if needed) and return the output directory for this lecture.
 
-            {output_dir}/{course_name}/Week_{week:02d}_{topic_slug}/
+        Naming priority:
+        1. If week > 0: ``Week_{week:02d}_{topic_slug}/`` under the course folder
+        2. If week == 0: use sanitized original PPT filename as folder name
 
         Parameters
         ----------
         classification : ClassificationResult
+        source_filename : str
+            Original filename, used as fallback folder name when week is unknown.
 
         Returns
         -------
@@ -52,10 +58,20 @@ class MarkdownWriter:
             The created (or existing) output directory.
         """
         course = self._sanitize(classification.course_name)
-        topic_slug = self._sanitize(classification.topic)
-        week_str = f"Week_{classification.week_number:02d}_{topic_slug}"
 
-        dir_path = self.output_dir / course / week_str
+        if classification.week_number > 0:
+            topic_slug = self._sanitize(classification.topic)
+            folder_name = f"Week_{classification.week_number:02d}_{topic_slug}"
+        else:
+            # Fallback: use original filename (without extension) as folder name
+            if source_filename:
+                stem = Path(source_filename).stem
+                folder_name = self._sanitize(stem)
+            else:
+                topic_slug = self._sanitize(classification.topic)
+                folder_name = f"Unknown_{topic_slug}"
+
+        dir_path = self.output_dir / course / folder_name
         dir_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {dir_path}")
         return dir_path

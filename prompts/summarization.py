@@ -31,33 +31,39 @@ then details and examples.
 7. Use proper Markdown: headers, bullet lists, numbered lists, **bold** for \
 emphasis, `inline code` for technical terms, ```code blocks``` for any code \
 snippets (with language specification).
-8. Output in the same language as the source material. If the source is \
-mixed Chinese/English, use Chinese as the primary language with English \
-technical terms preserved in parentheses.
+8. BILINGUAL OUTPUT REQUIRED. Produce every section in BOTH Chinese and \
+English. For each section, present the Chinese version FIRST, followed by \
+the English equivalent. Use the exact bilingual section headers specified \
+below. For body content, write full bilingual content: Chinese paragraph \
+followed by its English translation. If the source material is purely \
+English, still generate Chinese translations for all headers and key concepts.
+9. Use EXACTLY these bilingual section headers and structure:
 
 YOUR OUTPUT MUST FOLLOW THIS STRUCTURE EXACTLY:
 
-## 1. Core Knowledge Outline
+## 1. 核心知识大纲 / Core Knowledge Outline
 [A structured outline of the lecture organized as nested bullet points \
-with brief explanations for each major concept. This serves as a mental \
-map of the entire lecture. Use proper indentation for hierarchy.]
+with brief explanations for each major concept. Present in Chinese first, \
+then English. This serves as a mental map of the entire lecture. \
+Use proper indentation for hierarchy.]
 
-## 2. Key Concepts & Glossary
-[A markdown table with columns: Term | Definition | Memory Anchor/Analogy
+## 2. 关键概念与术语表 / Key Concepts & Glossary
+[A markdown table with bilingual columns: \
+术语 Term | 定义 Definition | 记忆锚点 Memory Anchor/Analogy
 Extract 5-15 important technical terms from the lecture.
-- Term: the exact technical term or concept name
-- Definition: a clear, self-contained explanation (2-4 sentences)
-- Memory Anchor/Analogy: a relatable real-world analogy that makes the \
-concept easy to remember and recall]
+- Term: the exact technical term or concept name (keep original language)
+- Definition: a clear, self-contained explanation in both Chinese and English
+- Memory Anchor/Analogy: a relatable real-world analogy in both Chinese and English]
 
-## 3. Critical Takeaways
+## 3. 重点总结 / Critical Takeaways
 [3-5 bullet points summarizing the MOST important things to remember from \
-this lecture. What concepts would be on the exam? What are the common \
+this lecture. Present in Chinese first, then English. \
+What concepts would be on the exam? What are the common \
 misconceptions students have? Focus on high-impact, testable knowledge.]
 
-## 4. Detailed Notes (AI-Expanded)
+## 4. 详细笔记（AI 扩展）/ Detailed Notes (AI-Expanded)
 [The main body of the review note. Go through each major topic from the \
-lecture and provide expanded explanations. Include:
+lecture and provide expanded explanations in both Chinese and English. Include:
 - Conceptual foundations
 - Step-by-step derivations where applicable
 - Examples and counter-examples

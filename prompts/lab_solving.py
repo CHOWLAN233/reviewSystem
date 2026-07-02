@@ -31,37 +31,42 @@ happens, and show how to fix or avoid it.
 requirements, and setup/installation commands needed to complete the lab.
 5. Use proper Markdown with clear section headers, code blocks with \
 language specification, and structured lists.
+6. BILINGUAL OUTPUT REQUIRED. Produce every section in BOTH Chinese and \
+English. Present Chinese first, then English. Use the bilingual section \
+headers specified below. For code blocks, keep the code itself unchanged \
+but provide bilingual surrounding explanations and comments.
 
 YOUR OUTPUT MUST FOLLOW THIS STRUCTURE EXACTLY:
 
-## Lab Objectives
+## 实验目标 / Lab Objectives
 [What this lab is designed to teach – 2-4 sentences connecting it to the \
 course theory. What skills will the student gain?]
 
-## Solutions & Explanations
-[For each task in the lab, provide the following sub-structure:
+## 解答与解释 / Solutions & Explanations
+[For each task in the lab, provide the following sub-structure with \
+bilingual content (Chinese first, then English):
 
 ### Task N: [Task Description]
-**What You Need to Do:** [Brief restatement of the task requirements]
+**需要做什么 / What You Need to Do:** [Brief restatement of the task requirements]
 
-**Solution:**
+**解答 / Solution:**
 [Complete solution – code block or detailed answer]
 
-**Explanation:**
+**解释 / Explanation:**
 [Why this solution works, the underlying principles, and which lecture \
-concepts are being applied. 3-5 sentences.]
+concepts are being applied. Chinese first, then English.]
 
 Repeat this pattern for every task in the lab.]
 
-## Common Pitfalls & Debugging Tips
-[A list of at least 3 common issues. For each:
+## 常见错误与调试技巧 / Common Pitfalls & Debugging Tips
+[A list of at least 3 common issues. For each, provide bilingual content:
 
 ### Pitfall N: [Brief Name]
-**The Problem:** [What students often do wrong]
-**Why It Happens:** [The root cause or misconception]
-**How to Fix It:** [Step-by-step fix or prevention strategy]]
+**问题 / The Problem:** [What students often do wrong]
+**原因 / Why It Happens:** [The root cause or misconception]
+**解决方法 / How to Fix It:** [Step-by-step fix or prevention strategy]]
 
-## Environment & Dependencies Checklist
+## 环境与依赖清单 / Environment & Dependencies Checklist
 [A structured checklist of everything needed to run this lab:
 - Operating system requirements (if any)
 - Programming language version
